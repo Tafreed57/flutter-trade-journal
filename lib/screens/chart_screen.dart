@@ -1,0 +1,1672 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../models/chart_drawing.dart';
+import '../models/chart_marker.dart';
+import '../models/timeframe.dart';
+import '../state/chart_drawing_provider.dart';
+import '../state/market_data_provider.dart';
+import '../state/paper_trading_provider.dart';
+import '../state/trade_provider.dart';
+import '../theme/app_theme.dart';
+import '../widgets/charts/candlestick_chart.dart';
+
+export '../widgets/charts/candlestick_chart.dart' show ChartIndicator;
+
+/// Main charting screen - Professional trading experience
+/// 
+/// Features:
+/// - Symbol selector with search
+/// - Timeframe buttons
+/// - Interactive candlestick chart with crosshair
+/// - OHLC stats bar
+/// - Open positions panel
+/// - Order entry with SL/TP
+/// - Trade notifications
+class ChartScreen extends StatefulWidget {
+  const ChartScreen({super.key});
+
+  @override
+  State<ChartScreen> createState() => _ChartScreenState();
+}
+
+class _ChartScreenState extends State<ChartScreen> {
+  // Chart settings
+  bool _showGrid = true;
+  final List<ChartIndicator> _indicators = [
+    ChartIndicator(name: 'EMA', period: 9, color: const Color(0xFFFFD700), enabled: false),
+    ChartIndicator(name: 'EMA', period: 21, color: const Color(0xFF00BFFF), enabled: false),
+    ChartIndicator(name: 'EMA', period: 50, color: const Color(0xFFFF69B4), enabled: false),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final marketProvider = context.read<MarketDataProvider>();
+      if (!marketProvider.isConfigured) return;
+      if (marketProvider.candles.isEmpty && !marketProvider.isLoading) {
+        marketProvider.init();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Consumer<MarketDataProvider>(
+          builder: (context, provider, _) {
+            if (!provider.isConfigured) {
+              return _buildApiNotConfigured();
+            }
+            
+            // Sync price to paper trading provider
+            if (provider.lastPrice != null) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  context.read<PaperTradingProvider>().updatePrice(provider.lastPrice!);
+                }
+              });
+            }
+            
+            return Column(
+              children: [
+                // Header bar
+                _buildHeader(provider),
+                
+                // OHLC stats + timeframes
+                _buildStatsAndTimeframes(provider),
+                
+                // Chart area
+                Expanded(
+                  flex: 3,
+                  child: _buildChartArea(provider),
+                ),
+                
+                // Trading panel
+                const _TradingPanel(),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildApiNotConfigured() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.warning.withValues(alpha: 0.1),
+                border: Border.all(
+                  color: AppColors.warning.withValues(alpha: 0.3),
+                  width: 2,
+                ),
+              ),
+              child: const Icon(
+                Icons.key_rounded,
+                size: 40,
+                color: AppColors.warning,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'API Key Required',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'To view live charts, you need to add your Finnhub API key.',
+              style: Theme.of(context).textTheme.bodyMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '1. Get a free key at finnhub.io',
+                    style: TextStyle(color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '2. Create a .env file in project root',
+                    style: TextStyle(color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text(
+                      'FINNHUB_API_KEY=your_key_here',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        color: AppColors.accent,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '3. Restart the app',
+                    style: TextStyle(color: AppColors.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(MarketDataProvider provider) {
+    final price = provider.lastPrice?.price;
+    final candles = provider.candles;
+    
+    // Calculate change from previous close
+    double? change;
+    double? changePercent;
+    if (candles.length >= 2 && price != null) {
+      final prevClose = candles[candles.length - 2].close;
+      change = price - prevClose;
+      changePercent = (change / prevClose) * 100;
+    }
+    
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Row(
+        children: [
+          // Symbol selector
+          GestureDetector(
+            onTap: () => _showSymbolSearch(context, provider),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    provider.currentSymbol,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    color: AppColors.textSecondary,
+                    size: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          const SizedBox(width: 12),
+          
+          // Price display
+          if (price != null) ...[
+            Text(
+              '\$${price.toStringAsFixed(2)}',
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            if (change != null) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: change >= 0 
+                      ? AppColors.profit.withValues(alpha: 0.15)
+                      : AppColors.loss.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '${change >= 0 ? '+' : ''}${changePercent!.toStringAsFixed(2)}%',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: change >= 0 ? AppColors.profit : AppColors.loss,
+                  ),
+                ),
+              ),
+            ],
+          ],
+          
+          const Spacer(),
+          
+          // Drawing tools
+          const _DrawingToolbar(),
+          
+          const SizedBox(width: 8),
+          
+          // Mock mode indicator
+          if (provider.isMockMode)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.warning.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text(
+                'DEMO',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.warning,
+                ),
+              ),
+            ),
+          
+          const SizedBox(width: 8),
+          
+          // Chart settings button
+          GestureDetector(
+            onTap: () => _showChartSettings(context),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.tune_rounded,
+                color: AppColors.textSecondary,
+                size: 18,
+              ),
+            ),
+          ),
+          
+          const SizedBox(width: 8),
+          
+          // Connection status
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              provider.isConnected ? Icons.wifi_rounded : Icons.wifi_off_rounded,
+              color: provider.isConnected ? AppColors.profit : AppColors.loss,
+              size: 18,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  void _showChartSettings(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) => Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.tune_rounded, color: AppColors.accent),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Chart Settings',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                    color: AppColors.textSecondary,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              
+              // Grid toggle
+              SwitchListTile(
+                title: const Text('Show Grid'),
+                value: _showGrid,
+                onChanged: (v) {
+                  setSheetState(() => _showGrid = v);
+                  setState(() => _showGrid = v);
+                },
+                activeTrackColor: AppColors.accent,
+                contentPadding: EdgeInsets.zero,
+              ),
+              
+              const Divider(color: AppColors.border),
+              const SizedBox(height: 8),
+              
+              const Text(
+                'Indicators',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 12),
+              
+              // EMA toggles
+              ..._indicators.asMap().entries.map((entry) {
+                final i = entry.key;
+                final indicator = entry.value;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 16,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          color: indicator.color,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          '${indicator.name} ${indicator.period}',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                      Switch(
+                        value: indicator.enabled,
+                        onChanged: (v) {
+                          setSheetState(() {
+                            _indicators[i] = indicator.copyWith(enabled: v);
+                          });
+                          setState(() {
+                            _indicators[i] = indicator.copyWith(enabled: v);
+                          });
+                        },
+                        activeTrackColor: indicator.color,
+                      ),
+                    ],
+                  ),
+                );
+              }),
+              
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatsAndTimeframes(MarketDataProvider provider) {
+    final candles = provider.candles;
+    final lastCandle = candles.isNotEmpty ? candles.last : null;
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(
+        children: [
+          // OHLC stats
+          if (lastCandle != null) ...[
+            _StatChip('O', lastCandle.open.toStringAsFixed(2)),
+            _StatChip('H', lastCandle.high.toStringAsFixed(2), color: AppColors.profit),
+            _StatChip('L', lastCandle.low.toStringAsFixed(2), color: AppColors.loss),
+            _StatChip('C', lastCandle.close.toStringAsFixed(2)),
+          ],
+          
+          const Spacer(),
+          
+          // Timeframe selector
+          ...Timeframe.quickSelect.map((tf) {
+            final isSelected = provider.currentTimeframe == tf;
+            return Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: GestureDetector(
+                onTap: () => provider.setTimeframe(tf),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: isSelected ? AppColors.accent : Colors.transparent,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: isSelected ? AppColors.accent : AppColors.border,
+                    ),
+                  ),
+                  child: Text(
+                    tf.label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: isSelected ? AppColors.background : AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChartArea(MarketDataProvider provider) {
+    if (provider.isLoading) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: AppColors.accent),
+            SizedBox(height: 16),
+            Text('Loading chart...', style: TextStyle(color: AppColors.textSecondary)),
+          ],
+        ),
+      );
+    }
+
+    if (provider.hasError) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline_rounded, size: 48, color: AppColors.loss),
+            const SizedBox(height: 16),
+            Text(
+              provider.error ?? 'Failed to load chart',
+              style: const TextStyle(color: AppColors.textSecondary),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: () => provider.refresh(),
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Consumer3<TradeProvider, PaperTradingProvider, ChartDrawingProvider>(
+      builder: (context, tradeProvider, paperProvider, drawingProvider, _) {
+        final markers = _buildChartMarkers(
+          provider.currentSymbol, 
+          tradeProvider, 
+          paperProvider,
+        );
+        final positionLines = _buildPositionLines(
+          provider.currentSymbol, 
+          paperProvider,
+        );
+        
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: CandlestickChart(
+            candles: provider.candles,
+            currentPrice: provider.lastPrice?.price,
+            showVolume: true,
+            markers: markers,
+            positionLines: positionLines,
+            indicators: _indicators.where((i) => i.enabled).toList(),
+            showGrid: _showGrid,
+            drawings: drawingProvider.drawings,
+            activeDrawing: drawingProvider.activeDrawing,
+            currentTool: drawingProvider.currentTool,
+            onDrawingStart: drawingProvider.startDrawing,
+            onDrawingUpdate: drawingProvider.updateDrawing,
+            onDrawingComplete: drawingProvider.completeDrawing,
+          ),
+        );
+      },
+    );
+  }
+  
+  List<ChartMarker> _buildChartMarkers(
+    String symbol, 
+    TradeProvider tradeProvider,
+    PaperTradingProvider paperProvider,
+  ) {
+    final markers = <ChartMarker>[];
+    
+    for (final trade in tradeProvider.trades) {
+      if (trade.symbol.toUpperCase() == symbol.toUpperCase()) {
+        markers.addAll(ChartMarker.fromTrade(trade));
+      }
+    }
+    
+    for (final position in paperProvider.closedPositions) {
+      if (position.symbol.toUpperCase() == symbol.toUpperCase()) {
+        markers.addAll(ChartMarker.fromPosition(position));
+      }
+    }
+    
+    markers.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    return markers;
+  }
+  
+  List<ChartLine> _buildPositionLines(
+    String symbol,
+    PaperTradingProvider paperProvider,
+  ) {
+    final lines = <ChartLine>[];
+    
+    for (final position in paperProvider.openPositions) {
+      if (position.symbol.toUpperCase() == symbol.toUpperCase()) {
+        lines.addAll(ChartLine.fromPosition(position));
+      }
+    }
+    
+    return lines;
+  }
+
+  void _showSymbolSearch(BuildContext context, MarketDataProvider provider) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => _SymbolSearchSheet(provider: provider),
+    );
+  }
+}
+
+class _StatChip extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? color;
+
+  const _StatChip(this.label, this.value, {this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 12),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$label ',
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppColors.textTertiary,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: color ?? AppColors.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Combined trading panel with positions and order entry
+class _TradingPanel extends StatefulWidget {
+  const _TradingPanel();
+
+  @override
+  State<_TradingPanel> createState() => _TradingPanelState();
+}
+
+class _TradingPanelState extends State<_TradingPanel> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  double _quantity = 1.0;
+  double? _stopLossPercent;
+  double? _takeProfitPercent;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer2<PaperTradingProvider, MarketDataProvider>(
+      builder: (context, paperProvider, marketProvider, _) {
+        final currentPrice = paperProvider.getCurrentPrice(marketProvider.currentSymbol);
+        final openPositions = paperProvider.openPositions
+            .where((p) => p.symbol == marketProvider.currentSymbol)
+            .toList();
+
+        return Container(
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            border: Border(top: BorderSide(color: AppColors.border)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Account summary bar
+              _buildAccountBar(paperProvider),
+              
+              // Tabs
+              Container(
+                height: 36,
+                decoration: BoxDecoration(
+                  border: Border(bottom: BorderSide(color: AppColors.border)),
+                ),
+                child: TabBar(
+                  controller: _tabController,
+                  indicatorColor: AppColors.accent,
+                  indicatorWeight: 2,
+                  labelColor: AppColors.accent,
+                  unselectedLabelColor: AppColors.textSecondary,
+                  labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  tabs: [
+                    Tab(text: 'Order${openPositions.isNotEmpty ? ' (${openPositions.length})' : ''}'),
+                    const Tab(text: 'Positions'),
+                  ],
+                ),
+              ),
+              
+              // Tab content
+              SizedBox(
+                height: 140,
+                child: TabBarView(
+                  controller: _tabController,
+                  children: [
+                    _buildOrderTab(paperProvider, marketProvider, currentPrice),
+                    _buildPositionsTab(paperProvider, marketProvider),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAccountBar(PaperTradingProvider provider) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          _AccountStat('Balance', '\$${provider.balance.toStringAsFixed(2)}'),
+          _AccountStat(
+            'Unrealized',
+            '${provider.unrealizedPnL >= 0 ? '+' : ''}\$${provider.unrealizedPnL.toStringAsFixed(2)}',
+            color: provider.unrealizedPnL >= 0 ? AppColors.profit : AppColors.loss,
+          ),
+          _AccountStat(
+            'Realized',
+            '${provider.realizedPnL >= 0 ? '+' : ''}\$${provider.realizedPnL.toStringAsFixed(2)}',
+            color: provider.realizedPnL >= 0 ? AppColors.profit : AppColors.loss,
+          ),
+          const Spacer(),
+          // Reset button
+          IconButton(
+            onPressed: () => _showResetDialog(context, provider),
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            color: AppColors.textSecondary,
+            tooltip: 'Reset Account',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOrderTab(
+    PaperTradingProvider paperProvider,
+    MarketDataProvider marketProvider,
+    double? currentPrice,
+  ) {
+    final symbol = marketProvider.currentSymbol;
+    final hasPosition = paperProvider.hasPositionFor(symbol);
+    
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        children: [
+          // Quantity and SL/TP row
+          Row(
+            children: [
+              // Quantity selector
+              Expanded(
+                child: _QuantitySelector(
+                  value: _quantity,
+                  onChanged: (v) => setState(() => _quantity = v),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // SL input
+              SizedBox(
+                width: 70,
+                child: _PercentInput(
+                  label: 'SL %',
+                  value: _stopLossPercent,
+                  onChanged: (v) => setState(() => _stopLossPercent = v),
+                  isLoss: true,
+                ),
+              ),
+              const SizedBox(width: 8),
+              // TP input
+              SizedBox(
+                width: 70,
+                child: _PercentInput(
+                  label: 'TP %',
+                  value: _takeProfitPercent,
+                  onChanged: (v) => setState(() => _takeProfitPercent = v),
+                  isLoss: false,
+                ),
+              ),
+            ],
+          ),
+          
+          const SizedBox(height: 12),
+          
+          // Buy/Sell buttons
+          Row(
+            children: [
+              Expanded(
+                child: _TradeButton(
+                  label: 'BUY',
+                  sublabel: currentPrice != null ? '\$${currentPrice.toStringAsFixed(2)}' : '--',
+                  color: AppColors.profit,
+                  onPressed: currentPrice != null ? () => _placeTrade(
+                    context, paperProvider, symbol, currentPrice, true,
+                  ) : null,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _TradeButton(
+                  label: hasPosition ? 'CLOSE' : 'SELL',
+                  sublabel: currentPrice != null ? '\$${currentPrice.toStringAsFixed(2)}' : '--',
+                  color: AppColors.loss,
+                  onPressed: currentPrice != null ? () {
+                    if (hasPosition) {
+                      _closePosition(context, paperProvider, symbol);
+                    } else {
+                      _placeTrade(context, paperProvider, symbol, currentPrice, false);
+                    }
+                  } : null,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPositionsTab(
+    PaperTradingProvider paperProvider,
+    MarketDataProvider marketProvider,
+  ) {
+    final positions = paperProvider.openPositions;
+    
+    if (positions.isEmpty) {
+      return const Center(
+        child: Text(
+          'No open positions',
+          style: TextStyle(color: AppColors.textSecondary),
+        ),
+      );
+    }
+    
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      itemCount: positions.length,
+      itemBuilder: (context, index) {
+        final position = positions[index];
+        final currentPrice = paperProvider.getCurrentPrice(position.symbol);
+        final unrealizedPnL = currentPrice != null 
+            ? position.unrealizedPnL(currentPrice)
+            : 0.0;
+        
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceLight,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Row(
+            children: [
+              // Side indicator
+              Container(
+                width: 4,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: position.isLong ? AppColors.profit : AppColors.loss,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 10),
+              
+              // Position info
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          position.symbol,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: position.isLong 
+                                ? AppColors.profit.withValues(alpha: 0.15)
+                                : AppColors.loss.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            position.isLong ? 'LONG' : 'SHORT',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              color: position.isLong ? AppColors.profit : AppColors.loss,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${position.quantity} @ \$${position.entryPrice.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              // P&L
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '${unrealizedPnL >= 0 ? '+' : ''}\$${unrealizedPnL.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: unrealizedPnL >= 0 ? AppColors.profit : AppColors.loss,
+                    ),
+                  ),
+                  if (currentPrice != null)
+                    Text(
+                      '\$${currentPrice.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                ],
+              ),
+              
+              const SizedBox(width: 8),
+              
+              // Close button
+              IconButton(
+                onPressed: () => _closePositionById(context, paperProvider, position.id),
+                icon: const Icon(Icons.close_rounded, size: 18),
+                style: IconButton.styleFrom(
+                  backgroundColor: AppColors.loss.withValues(alpha: 0.15),
+                  foregroundColor: AppColors.loss,
+                  padding: const EdgeInsets.all(6),
+                  minimumSize: const Size(32, 32),
+                ),
+                tooltip: 'Close Position',
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _placeTrade(
+    BuildContext context,
+    PaperTradingProvider provider,
+    String symbol,
+    double price,
+    bool isBuy,
+  ) {
+    // Set SL/TP if configured
+    provider.setStopLossPercent(_stopLossPercent);
+    provider.setTakeProfitPercent(_takeProfitPercent);
+    provider.setOrderQuantity(_quantity);
+    
+    final success = isBuy 
+        ? provider.buy(symbol, price)
+        : provider.sell(symbol, price);
+    
+    if (success) {
+      _showSnackBar(
+        context,
+        '${isBuy ? 'Bought' : 'Sold'} $_quantity $symbol @ \$${price.toStringAsFixed(2)}',
+        isBuy ? AppColors.profit : AppColors.loss,
+      );
+    } else if (provider.hasError) {
+      _showSnackBar(context, provider.error!, AppColors.loss);
+      provider.clearError();
+    }
+  }
+
+  void _closePosition(BuildContext context, PaperTradingProvider provider, String symbol) {
+    final position = provider.getPositionForSymbol(symbol);
+    if (position != null) {
+      _closePositionById(context, provider, position.id);
+    }
+  }
+
+  void _closePositionById(BuildContext context, PaperTradingProvider provider, String positionId) {
+    final position = provider.openPositions.firstWhere((p) => p.id == positionId);
+    final success = provider.closePosition(positionId);
+    
+    if (success) {
+      final pnl = position.realizedPnL ?? 0;
+      _showSnackBar(
+        context,
+        'Closed ${position.symbol} | P&L: ${pnl >= 0 ? '+' : ''}\$${pnl.toStringAsFixed(2)} → Logged to Journal',
+        pnl >= 0 ? AppColors.profit : AppColors.loss,
+      );
+      
+      // Refresh trades list
+      context.read<TradeProvider>().refresh();
+    }
+  }
+
+  void _showResetDialog(BuildContext context, PaperTradingProvider provider) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('Reset Paper Account?'),
+        content: const Text('This will reset your balance to \$10,000 and clear all positions.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              provider.resetAccount();
+              Navigator.pop(context);
+              _showSnackBar(context, 'Account reset to \$10,000', AppColors.accent);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.loss),
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSnackBar(BuildContext context, String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+}
+
+class _AccountStat extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? color;
+
+  const _AccountStat(this.label, this.value, {this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 10,
+              color: AppColors.textTertiary,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: color ?? AppColors.textPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QuantitySelector extends StatelessWidget {
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  const _QuantitySelector({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Text('Qty:', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+        const SizedBox(width: 8),
+        ...[ 1.0, 5.0, 10.0, 25.0].map((q) {
+          final isSelected = value == q;
+          return Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: GestureDetector(
+              onTap: () => onChanged(q),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: isSelected ? AppColors.accent : AppColors.surfaceLight,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: isSelected ? AppColors.accent : AppColors.border,
+                  ),
+                ),
+                child: Text(
+                  q.toInt().toString(),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isSelected ? AppColors.background : AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+}
+
+class _PercentInput extends StatelessWidget {
+  final String label;
+  final double? value;
+  final ValueChanged<double?> onChanged;
+  final bool isLoss;
+
+  const _PercentInput({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+    required this.isLoss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => _showPercentPicker(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        decoration: BoxDecoration(
+          color: value != null 
+              ? (isLoss ? AppColors.loss : AppColors.profit).withValues(alpha: 0.1)
+              : AppColors.surfaceLight,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: value != null
+                ? (isLoss ? AppColors.loss : AppColors.profit).withValues(alpha: 0.3)
+                : AppColors.border,
+          ),
+        ),
+        child: Text(
+          value != null ? '${value!.toStringAsFixed(1)}%' : label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: value != null
+                ? (isLoss ? AppColors.loss : AppColors.profit)
+                : AppColors.textTertiary,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ),
+    );
+  }
+
+  void _showPercentPicker(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _PercentOption('Off', null, value, onChanged, context),
+                _PercentOption('1%', 1.0, value, onChanged, context),
+                _PercentOption('2%', 2.0, value, onChanged, context),
+                _PercentOption('3%', 3.0, value, onChanged, context),
+                _PercentOption('5%', 5.0, value, onChanged, context),
+                _PercentOption('10%', 10.0, value, onChanged, context),
+              ],
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PercentOption extends StatelessWidget {
+  final String label;
+  final double? optionValue;
+  final double? currentValue;
+  final ValueChanged<double?> onChanged;
+  final BuildContext parentContext;
+
+  const _PercentOption(
+    this.label,
+    this.optionValue,
+    this.currentValue,
+    this.onChanged,
+    this.parentContext,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final isSelected = optionValue == currentValue;
+    return GestureDetector(
+      onTap: () {
+        onChanged(optionValue);
+        Navigator.pop(context);
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.accent : AppColors.surfaceLight,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected ? AppColors.accent : AppColors.border,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: isSelected ? AppColors.background : AppColors.textPrimary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TradeButton extends StatelessWidget {
+  final String label;
+  final String sublabel;
+  final Color color;
+  final VoidCallback? onPressed;
+
+  const _TradeButton({
+    required this.label,
+    required this.sublabel,
+    required this.color,
+    this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: onPressed != null ? color : color.withValues(alpha: 0.3),
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: onPressed != null ? Colors.white : Colors.white54,
+                ),
+              ),
+              Text(
+                sublabel,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: onPressed != null ? Colors.white70 : Colors.white38,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Symbol search bottom sheet
+class _SymbolSearchSheet extends StatefulWidget {
+  final MarketDataProvider provider;
+
+  const _SymbolSearchSheet({required this.provider});
+
+  @override
+  State<_SymbolSearchSheet> createState() => _SymbolSearchSheetState();
+}
+
+class _SymbolSearchSheetState extends State<_SymbolSearchSheet> {
+  final _searchController = TextEditingController();
+  List<dynamic> _results = [];
+  bool _isSearching = false;
+
+  static const _popularSymbols = [
+    'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA',
+    'META', 'NVDA', 'JPM', 'V', 'WMT',
+  ];
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search(String query) async {
+    if (query.length < 2) {
+      setState(() => _results = []);
+      return;
+    }
+
+    setState(() => _isSearching = true);
+    final results = await widget.provider.searchSymbols(query);
+    
+    if (mounted) {
+      setState(() {
+        _results = results;
+        _isSearching = false;
+      });
+    }
+  }
+
+  void _selectSymbol(String symbol) {
+    widget.provider.setSymbol(symbol);
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.7,
+      minChildSize: 0.5,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (context, scrollController) {
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: TextField(
+                controller: _searchController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Search symbols (e.g., AAPL, TSLA)',
+                  prefixIcon: Icon(Icons.search_rounded),
+                ),
+                onChanged: _search,
+              ),
+            ),
+            
+            const SizedBox(height: 16),
+            
+            Expanded(
+              child: _searchController.text.isEmpty
+                  ? _buildPopularSymbols(scrollController)
+                  : _buildSearchResults(scrollController),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildPopularSymbols(ScrollController scrollController) {
+    return ListView(
+      controller: scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      children: [
+        const Text(
+          'Popular Symbols',
+          style: TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _popularSymbols.map((symbol) {
+            final isSelected = widget.provider.currentSymbol == symbol;
+            return GestureDetector(
+              onTap: () => _selectSymbol(symbol),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: BoxDecoration(
+                  color: isSelected ? AppColors.accent : AppColors.surfaceLight,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isSelected ? AppColors.accent : AppColors.border,
+                  ),
+                ),
+                child: Text(
+                  symbol,
+                  style: TextStyle(
+                    color: isSelected ? AppColors.background : AppColors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSearchResults(ScrollController scrollController) {
+    if (_isSearching) {
+      return const Center(
+        child: CircularProgressIndicator(color: AppColors.accent),
+      );
+    }
+
+    if (_results.isEmpty) {
+      return Center(
+        child: Text(
+          'No results found',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      );
+    }
+
+    return ListView.builder(
+      controller: scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      itemCount: _results.length,
+      itemBuilder: (context, index) {
+        final result = _results[index];
+        return ListTile(
+          onTap: () => _selectSymbol(result.symbol),
+          title: Text(
+            result.symbol,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          subtitle: Text(
+            result.description,
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 12,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          trailing: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceLight,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              result.type,
+              style: const TextStyle(
+                color: AppColors.textTertiary,
+                fontSize: 10,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Drawing tools toolbar
+class _DrawingToolbar extends StatelessWidget {
+  const _DrawingToolbar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<ChartDrawingProvider>(
+      builder: (context, provider, _) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Tool buttons
+            _DrawingToolButton(
+              icon: Icons.remove_rounded,
+              label: 'Line',
+              isSelected: provider.currentTool == DrawingToolType.trendLine,
+              onTap: () => provider.setTool(
+                provider.currentTool == DrawingToolType.trendLine
+                    ? DrawingToolType.none
+                    : DrawingToolType.trendLine,
+              ),
+            ),
+            _DrawingToolButton(
+              icon: Icons.horizontal_rule_rounded,
+              label: 'H-Line',
+              isSelected: provider.currentTool == DrawingToolType.horizontalLine,
+              onTap: () => provider.setTool(
+                provider.currentTool == DrawingToolType.horizontalLine
+                    ? DrawingToolType.none
+                    : DrawingToolType.horizontalLine,
+              ),
+            ),
+            _DrawingToolButton(
+              icon: Icons.show_chart_rounded,
+              label: 'Fib',
+              isSelected: provider.currentTool == DrawingToolType.fibonacciRetracement,
+              onTap: () => provider.setTool(
+                provider.currentTool == DrawingToolType.fibonacciRetracement
+                    ? DrawingToolType.none
+                    : DrawingToolType.fibonacciRetracement,
+              ),
+            ),
+            _DrawingToolButton(
+              icon: Icons.crop_square_rounded,
+              label: 'Rect',
+              isSelected: provider.currentTool == DrawingToolType.rectangle,
+              onTap: () => provider.setTool(
+                provider.currentTool == DrawingToolType.rectangle
+                    ? DrawingToolType.none
+                    : DrawingToolType.rectangle,
+              ),
+            ),
+            
+            // Separator
+            if (provider.drawings.isNotEmpty) ...[
+              Container(
+                width: 1,
+                height: 20,
+                margin: const EdgeInsets.symmetric(horizontal: 8),
+                color: AppColors.border,
+              ),
+              // Clear all button
+              _DrawingToolButton(
+                icon: Icons.delete_outline_rounded,
+                label: 'Clear',
+                isSelected: false,
+                onTap: () => _showClearConfirmation(context, provider),
+                color: AppColors.loss,
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  void _showClearConfirmation(BuildContext context, ChartDrawingProvider provider) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('Clear All Drawings?'),
+        content: Text('This will remove all ${provider.drawings.length} drawings from the chart.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              provider.clearAll();
+              Navigator.pop(context);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.loss),
+            child: const Text('Clear All'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DrawingToolButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+  final Color? color;
+
+  const _DrawingToolButton({
+    required this.icon,
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: label,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(6),
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          decoration: BoxDecoration(
+            color: isSelected 
+                ? AppColors.accent.withValues(alpha: 0.2)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: isSelected ? AppColors.accent : Colors.transparent,
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: 18,
+            color: color ?? (isSelected ? AppColors.accent : AppColors.textSecondary),
+          ),
+        ),
+      ),
+    );
+  }
+}
