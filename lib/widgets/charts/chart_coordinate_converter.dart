@@ -91,19 +91,13 @@ class ChartCoordinateConverter {
     // Convert Y to price (top = maxPrice, bottom = minPrice)
     final price = maxPrice - (clampedY / chartHeight) * (maxPrice - minPrice);
     
-    // Convert X to timestamp
-    // Candles are drawn RIGHT to LEFT (newest on right)
-    // scrollOffset shifts the view to the left (showing older candles)
+    // Convert X to candleIndex
+    // Candles are drawn at: x = chartWidth - (candleIndex * candleStep) + scrollOffset
+    // So: candleIndex = (chartWidth + scrollOffset - x) / candleStep
     // 
-    // At x=chartWidth (right edge), we show the newest candles
-    // At x=0 (left edge), we show older candles
-    // 
-    // candleIndex 0 = newest candle (at chartWidth when scrollOffset=0)
+    // candleIndex 0 = newest candle
     // candleIndex increases for older candles
-    
-    // The x position from right edge, adjusted for scroll
-    final xFromRight = chartWidth - clampedX + scrollOffset;
-    final candleIndex = (xFromRight / candleStep).floor();
+    final candleIndex = ((chartWidth + scrollOffset - clampedX) / candleStep).floor();
     
     // Convert to array index (candles[0] is oldest, candles[length-1] is newest)
     final actualIndex = candles.length - 1 - candleIndex;
@@ -176,8 +170,8 @@ class ChartCoordinateConverter {
     }
     
     // Convert candleIndex to X
-    // candleIndex 0 is at chartWidth, higher indices move left
-    return chartWidth - (candleIndex * candleStep) - scrollOffset;
+    // This MUST match how candles are drawn: chartWidth - (i * candleStep) + scrollOffset
+    return chartWidth - (candleIndex * candleStep) + scrollOffset;
   }
   
   /// Find the candle at a given X screen coordinate

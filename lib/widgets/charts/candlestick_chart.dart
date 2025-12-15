@@ -592,8 +592,9 @@ Scroll: ${_scrollOffset.toStringAsFixed(1)}
       if (_panStartOffset != null && _scaleStartFocalPoint != null) {
         final dx = _scaleStartFocalPoint!.dx - details.localFocalPoint.dx;
         final totalWidth = widget.candles.length * (_candleWidth * (1 + _candleGap));
-        _scrollOffset = (_panStartOffset! + dx)
-            .clamp(0, math.max(0, totalWidth - chartAreaWidth + _priceAxisWidth));
+        // Max scroll: when the oldest candle is at the right edge
+        final maxScroll = math.max(0.0, totalWidth - chartAreaWidth);
+        _scrollOffset = (_panStartOffset! + dx).clamp(0.0, maxScroll);
       }
     });
   }
