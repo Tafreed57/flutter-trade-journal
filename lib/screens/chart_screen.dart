@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../core/logger.dart';
 import '../models/chart_drawing.dart';
 import '../models/chart_marker.dart';
 import '../models/timeframe.dart';
@@ -52,7 +53,12 @@ class _ChartScreenState extends State<ChartScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final marketProvider = context.read<MarketDataProvider>();
       if (!marketProvider.isConfigured) return;
-      if (marketProvider.candles.isEmpty && !marketProvider.isLoading) {
+      
+      // IMPORTANT: Always call init() if not initialized
+      // This handles hot restart recovery where engine has cached data
+      // but provider hasn't connected to live updates yet
+      if (!marketProvider.isInitialized && !marketProvider.isLoading) {
+        Log.d('ChartScreen: Triggering MarketDataProvider.init()');
         marketProvider.init();
       }
     });

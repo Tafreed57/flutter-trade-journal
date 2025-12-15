@@ -244,8 +244,9 @@ class FinnhubMarketDataRepository implements MarketDataRepository {
       );
       
       _isConnected = true;
+      _reconnectAttempts = 0; // Reset on successful connect
       _connectionController.add(true);
-      Log.ws('WebSocket connected');
+      Log.ws('WebSocket connected successfully');
       
       // Listen to messages
       _wsChannel!.stream.listen(

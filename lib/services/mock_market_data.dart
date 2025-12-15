@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import '../core/logger.dart';
 import '../models/candle.dart';
 import '../models/live_price.dart';
 import '../models/timeframe.dart';
@@ -32,18 +33,28 @@ class MockMarketDataRepository implements MarketDataRepository {
   
   // Active price streams
   final Map<String, StreamController<LivePrice>> _priceStreams = {};
-  final StreamController<bool> _connectionController = StreamController<bool>.broadcast();
+  StreamController<bool> _connectionController = StreamController<bool>.broadcast();
   Timer? _priceUpdateTimer;
   bool _isConnected = false;
+  bool _disposed = false;
 
   @override
   Future<void> init() async {
+    // Handle re-init after dispose (e.g., hot restart)
+    if (_disposed) {
+      _connectionController = StreamController<bool>.broadcast();
+      _disposed = false;
+    }
+    
     _isConnected = true;
     _connectionController.add(true);
+    Log.d('MockMarketDataRepository initialized, connected: $_isConnected');
   }
 
   @override
   Future<void> dispose() async {
+    _disposed = true;
+    _isConnected = false;
     _priceUpdateTimer?.cancel();
     for (final controller in _priceStreams.values) {
       controller.close();

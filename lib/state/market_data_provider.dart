@@ -36,6 +36,9 @@ class MarketDataProvider extends ChangeNotifier {
   String? _error;
   bool _isConnected = false;
   
+  // Track if init() has been called (survives hot restart check)
+  bool _initialized = false;
+  
   // Subscriptions
   StreamSubscription<LivePrice>? _priceSubscription;
   StreamSubscription<bool>? _connectionSubscription;
@@ -57,6 +60,7 @@ class MarketDataProvider extends ChangeNotifier {
   bool get isConnected => _isConnected;
   bool get isConfigured => EnvConfig.isFinnhubConfigured || _useMockData;
   bool get isMockMode => _useMockData;
+  bool get isInitialized => _initialized;
   
   // Replay mode passthrough
   bool get isReplayMode => _engine.isReplayMode;
@@ -64,7 +68,18 @@ class MarketDataProvider extends ChangeNotifier {
   bool get isPlaying => _engine.isPlaying;
   
   /// Initialize the market data provider
+  /// 
+  /// This MUST be called after creation to establish connections.
+  /// Safe to call multiple times (idempotent after first call).
   Future<void> init() async {
+    // Prevent double-init (but allow re-init after dispose)
+    if (_initialized) {
+      Log.d('MarketDataProvider already initialized, skipping');
+      return;
+    }
+    
+    Log.i('MarketDataProvider.init() starting...');
+    
     // Initialize the engine first (loads persisted data)
     await _engine.init();
     
@@ -79,11 +94,14 @@ class MarketDataProvider extends ChangeNotifier {
       
       // Still connect to live updates
       await _initRepository();
+      _initialized = true;
       return;
     }
     
     // No cached data, load from repository
     await _initRepository();
+    _initialized = true;
+    Log.i('MarketDataProvider.init() complete, connected: $_isConnected');
   }
   
   Future<void> _initRepository() async {
