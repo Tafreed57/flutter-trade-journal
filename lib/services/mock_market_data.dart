@@ -81,7 +81,13 @@ class MockMarketDataRepository implements MarketDataRepository {
     // Generate candles going forward from 'from' date
     var currentTime = _alignToTimeframe(from, timeframe);
     
-    while (currentTime.isBefore(to)) {
+    // Safety limit to prevent infinite loops
+    int iterations = 0;
+    const maxIterations = 10000;
+    
+    while (currentTime.isBefore(to) && iterations < maxIterations) {
+      iterations++;
+      
       // Skip weekends for stock data
       if (_shouldSkipTime(currentTime, timeframe)) {
         currentTime = currentTime.add(intervalDuration);
@@ -105,6 +111,9 @@ class MockMarketDataRepository implements MarketDataRepository {
     if (candles.isNotEmpty) {
       _currentPrices[symbol] = candles.last.close;
     }
+    
+    // Debug: Log candle count to verify
+    // print('Generated ${candles.length} candles for $symbol on ${timeframe.label}');
     
     return candles;
   }

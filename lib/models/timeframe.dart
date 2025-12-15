@@ -24,24 +24,25 @@ enum Timeframe {
 
   const Timeframe(this.apiValue, this.label, this.duration);
 
-  /// Get number of candles to fetch for a reasonable chart view
-  /// Returns count for approximately 100-200 candles
+  /// Get number of RAW intervals to request
+  /// This accounts for weekends/holidays being skipped
+  /// We request more than we need to ensure we get enough valid candles
   int get defaultCandleCount {
     switch (this) {
       case Timeframe.m1:
-        return 200; // ~3.3 hours
+        return 500; // Request more to account for non-trading hours
       case Timeframe.m5:
-        return 200; // ~16.6 hours
+        return 500; 
       case Timeframe.m15:
-        return 200; // ~50 hours
+        return 400;
       case Timeframe.m30:
-        return 150; // ~75 hours
+        return 400;
       case Timeframe.h1:
-        return 150; // ~6 days
+        return 400; // ~16 days raw → ~112 trading hours (16 trading days × 7 hours)
       case Timeframe.h4:
-        return 120; // ~20 days
+        return 300; // ~50 days raw → ~200+ 4H candles
       case Timeframe.d1:
-        return 120; // ~4 months
+        return 200; // ~200 days → ~140 trading days
       case Timeframe.w1:
         return 104; // ~2 years
       case Timeframe.mn1:

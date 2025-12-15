@@ -635,9 +635,14 @@ class _CandlestickChartState extends State<CandlestickChart>
         // Calculate delta from start position
         final dx = _scaleStartFocalPoint!.dx - localPosition.dx;
         final totalWidth = widget.candles.length * (_candleWidth * (1 + _candleGap));
-        // Allow scrolling to show some "future" space on the right
-        final maxScroll = math.max(0.0, totalWidth - _chartWidth + 100);
-        _scrollOffset = (_panStartOffset! + dx).clamp(0.0, maxScroll);
+        
+        // ALWAYS allow panning, even if all candles fit on screen
+        // Min scroll: negative value to allow panning left (show future space)
+        // Max scroll: positive value to pan right (show older candles)
+        final minScroll = -_chartWidth * 0.5; // Allow 50% future space
+        final maxScroll = math.max(totalWidth * 0.5, totalWidth - _chartWidth + _chartWidth * 0.5);
+        
+        _scrollOffset = (_panStartOffset! + dx).clamp(minScroll, maxScroll);
         _updateDebugText();
       });
     }

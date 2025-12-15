@@ -212,8 +212,11 @@ class ChartCoordinateConverter {
   /// Get the total scrollable width in pixels
   double get totalScrollableWidth => candles.length * candleStep;
   
-  /// Get the maximum scroll offset (0 = newest candles visible)
-  double get maxScrollOffset => math.max(0.0, totalScrollableWidth - chartWidth);
+  /// Get the maximum scroll offset (allows panning past the data)
+  double get maxScrollOffset => math.max(totalScrollableWidth * 0.5, totalScrollableWidth - chartWidth + chartWidth * 0.5);
+  
+  /// Get the minimum scroll offset (negative to allow panning to "future")
+  double get minScrollOffset => -chartWidth * 0.5;
   
   /// Get visible candle index range
   (int startIndex, int endIndex) get visibleCandleRange {
@@ -315,9 +318,9 @@ Cursor: (${cursor.dx.toStringAsFixed(1)}, ${cursor.dy.toStringAsFixed(1)})
 Price: ${point?.price.toStringAsFixed(2) ?? 'N/A'}
 CandleIdx: ${screenXToCandleIndex(cursor.dx).toStringAsFixed(2)}
 BackToScreen: ${backToScreen != null ? '(${backToScreen.dx.toStringAsFixed(1)}, ${backToScreen.dy.toStringAsFixed(1)})' : 'N/A'}
-Scroll: ${scrollOffset.toStringAsFixed(1)} / ${maxScrollOffset.toStringAsFixed(1)}
+Scroll: ${scrollOffset.toStringAsFixed(0)} [${minScrollOffset.toStringAsFixed(0)} to ${maxScrollOffset.toStringAsFixed(0)}]
 ChartW: ${chartWidth.toStringAsFixed(0)}, Step: ${candleStep.toStringAsFixed(1)}
-Candles: ${candles.length}
+Candles: ${candles.length}, TotalW: ${totalScrollableWidth.toStringAsFixed(0)}
 ''';
   }
 }
