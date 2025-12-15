@@ -70,6 +70,18 @@ class Trade extends HiveObject {
   @HiveField(11)
   final DateTime updatedAt;
   
+  @HiveField(12)
+  final double? stopLoss;
+  
+  @HiveField(13)
+  final double? takeProfit;
+  
+  @HiveField(14)
+  final String? screenshotPath;
+  
+  @HiveField(15)
+  final String? setup; // Trade setup type (breakout, reversal, etc.)
+  
   Trade({
     required this.id,
     required this.symbol,
@@ -83,6 +95,10 @@ class Trade extends HiveObject {
     this.notes,
     DateTime? createdAt,
     DateTime? updatedAt,
+    this.stopLoss,
+    this.takeProfit,
+    this.screenshotPath,
+    this.setup,
   })  : tags = tags ?? [],
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
@@ -119,6 +135,49 @@ class Trade extends HiveObject {
     return TradeOutcome.breakeven;
   }
   
+  /// Calculate risk amount (distance to stop loss)
+  double? get riskAmount {
+    if (stopLoss == null) return null;
+    final diff = (entryPrice - stopLoss!).abs();
+    return diff * quantity;
+  }
+  
+  /// Calculate reward amount (distance to take profit)
+  double? get rewardAmount {
+    if (takeProfit == null) return null;
+    final diff = (takeProfit! - entryPrice).abs();
+    return diff * quantity;
+  }
+  
+  /// Calculate planned risk-reward ratio
+  double? get plannedRiskReward {
+    if (stopLoss == null || takeProfit == null) return null;
+    final risk = (entryPrice - stopLoss!).abs();
+    final reward = (takeProfit! - entryPrice).abs();
+    if (risk == 0) return null;
+    return reward / risk;
+  }
+  
+  /// Check if stop loss was hit
+  bool get stoppedOut {
+    if (!isClosed || stopLoss == null || exitPrice == null) return false;
+    if (side == TradeSide.long) {
+      return exitPrice! <= stopLoss!;
+    } else {
+      return exitPrice! >= stopLoss!;
+    }
+  }
+  
+  /// Check if take profit was hit
+  bool get targetHit {
+    if (!isClosed || takeProfit == null || exitPrice == null) return false;
+    if (side == TradeSide.long) {
+      return exitPrice! >= takeProfit!;
+    } else {
+      return exitPrice! <= takeProfit!;
+    }
+  }
+  
   /// Create a copy of this trade with updated fields
   Trade copyWith({
     String? id,
@@ -133,6 +192,10 @@ class Trade extends HiveObject {
     String? notes,
     DateTime? createdAt,
     DateTime? updatedAt,
+    double? stopLoss,
+    double? takeProfit,
+    String? screenshotPath,
+    String? setup,
   }) {
     return Trade(
       id: id ?? this.id,
@@ -147,6 +210,10 @@ class Trade extends HiveObject {
       notes: notes ?? this.notes,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? DateTime.now(),
+      stopLoss: stopLoss ?? this.stopLoss,
+      takeProfit: takeProfit ?? this.takeProfit,
+      screenshotPath: screenshotPath ?? this.screenshotPath,
+      setup: setup ?? this.setup,
     );
   }
   

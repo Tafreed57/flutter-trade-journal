@@ -32,6 +32,11 @@ class _AddTradeScreenState extends State<AddTradeScreen> {
   late final TextEditingController _notesController;
   late final TextEditingController _tagInputController;
   
+  // TP/SL Controllers
+  late final TextEditingController _stopLossController;
+  late final TextEditingController _takeProfitController;
+  late final TextEditingController _setupController;
+  
   // Form state
   TradeSide _side = TradeSide.long;
   DateTime _entryDate = DateTime.now();
@@ -39,6 +44,7 @@ class _AddTradeScreenState extends State<AddTradeScreen> {
   List<String> _tags = [];
   bool _isSubmitting = false;
   bool _isClosed = false;
+  bool _showRiskManagement = false;
   
   @override
   void initState() {
@@ -58,6 +64,13 @@ class _AddTradeScreenState extends State<AddTradeScreen> {
     );
     _notesController = TextEditingController(text: trade?.notes ?? '');
     _tagInputController = TextEditingController();
+    _stopLossController = TextEditingController(
+      text: trade?.stopLoss?.toString() ?? '',
+    );
+    _takeProfitController = TextEditingController(
+      text: trade?.takeProfit?.toString() ?? '',
+    );
+    _setupController = TextEditingController(text: trade?.setup ?? '');
     
     if (trade != null) {
       _side = trade.side;
@@ -65,6 +78,7 @@ class _AddTradeScreenState extends State<AddTradeScreen> {
       _exitDate = trade.exitDate;
       _tags = List.from(trade.tags);
       _isClosed = trade.isClosed;
+      _showRiskManagement = trade.stopLoss != null || trade.takeProfit != null;
     }
   }
   
@@ -76,6 +90,9 @@ class _AddTradeScreenState extends State<AddTradeScreen> {
     _exitPriceController.dispose();
     _notesController.dispose();
     _tagInputController.dispose();
+    _stopLossController.dispose();
+    _takeProfitController.dispose();
+    _setupController.dispose();
     super.dispose();
   }
 
@@ -220,6 +237,11 @@ class _AddTradeScreenState extends State<AddTradeScreen> {
                 ),
               ],
             ),
+            
+            const SizedBox(height: 24),
+            
+            // Risk Management Section (SL/TP)
+            _buildRiskManagementSection(),
             
             const SizedBox(height: 24),
             
@@ -377,6 +399,300 @@ class _AddTradeScreenState extends State<AddTradeScreen> {
       title,
       style: Theme.of(context).textTheme.titleSmall?.copyWith(
         color: AppColors.textSecondary,
+      ),
+    );
+  }
+
+  Widget _buildRiskManagementSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Toggle for risk management
+        InkWell(
+          onTap: () => setState(() => _showRiskManagement = !_showRiskManagement),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: _showRiskManagement 
+                  ? AppColors.accent.withValues(alpha: 0.1) 
+                  : AppColors.surfaceLight,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: _showRiskManagement ? AppColors.accent : AppColors.border,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.shield_outlined,
+                  color: _showRiskManagement ? AppColors.accent : AppColors.textTertiary,
+                  size: 20,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Risk Management',
+                        style: TextStyle(
+                          color: _showRiskManagement 
+                              ? AppColors.accent 
+                              : AppColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        'Set Stop Loss & Take Profit levels',
+                        style: TextStyle(
+                          color: AppColors.textTertiary,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  _showRiskManagement 
+                      ? Icons.keyboard_arrow_up_rounded 
+                      : Icons.keyboard_arrow_down_rounded,
+                  color: AppColors.textTertiary,
+                ),
+              ],
+            ),
+          ),
+        ),
+        
+        // Expandable SL/TP fields
+        AnimatedCrossFade(
+          firstChild: const SizedBox.shrink(),
+          secondChild: Column(
+            children: [
+              const SizedBox(height: 16),
+              
+              // Stop Loss and Take Profit row
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: AppColors.loss,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            _buildSectionTitle('Stop Loss'),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: _stopLossController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: '145.00',
+                            prefixText: '\$ ',
+                            filled: true,
+                            fillColor: AppColors.loss.withValues(alpha: 0.05),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                color: AppColors.loss.withValues(alpha: 0.3),
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                color: AppColors.loss,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'^\d*\.?\d*'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: AppColors.profit,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            _buildSectionTitle('Take Profit'),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: _takeProfitController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: '165.00',
+                            prefixText: '\$ ',
+                            filled: true,
+                            fillColor: AppColors.profit.withValues(alpha: 0.05),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                color: AppColors.profit.withValues(alpha: 0.3),
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                color: AppColors.profit,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'^\d*\.?\d*'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              
+              // Risk/Reward Preview
+              _buildRiskRewardPreview(),
+              
+              const SizedBox(height: 16),
+              
+              // Setup type dropdown
+              _buildSectionTitle('Trade Setup'),
+              const SizedBox(height: 8),
+              _SetupDropdown(
+                value: _setupController.text.isEmpty ? null : _setupController.text,
+                onChanged: (setup) => setState(() => _setupController.text = setup ?? ''),
+              ),
+            ],
+          ),
+          crossFadeState: _showRiskManagement
+              ? CrossFadeState.showSecond
+              : CrossFadeState.showFirst,
+          duration: const Duration(milliseconds: 200),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRiskRewardPreview() {
+    final entryPrice = double.tryParse(_entryPriceController.text);
+    final stopLoss = double.tryParse(_stopLossController.text);
+    final takeProfit = double.tryParse(_takeProfitController.text);
+    final quantity = double.tryParse(_quantityController.text);
+    
+    if (entryPrice == null || (stopLoss == null && takeProfit == null)) {
+      return const SizedBox.shrink();
+    }
+    
+    double? riskAmount;
+    double? rewardAmount;
+    double? rr;
+    
+    if (stopLoss != null && quantity != null) {
+      riskAmount = (entryPrice - stopLoss).abs() * quantity;
+    }
+    if (takeProfit != null && quantity != null) {
+      rewardAmount = (takeProfit - entryPrice).abs() * quantity;
+    }
+    if (stopLoss != null && takeProfit != null) {
+      final risk = (entryPrice - stopLoss).abs();
+      final reward = (takeProfit - entryPrice).abs();
+      if (risk > 0) rr = reward / risk;
+    }
+    
+    return Container(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLight,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.analytics_rounded,
+                color: AppColors.textTertiary,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Risk/Reward Analysis',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              // Risk
+              Expanded(
+                child: _RRCard(
+                  label: 'Risk',
+                  value: riskAmount != null ? '\$${riskAmount.toStringAsFixed(2)}' : '--',
+                  color: AppColors.loss,
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Reward
+              Expanded(
+                child: _RRCard(
+                  label: 'Reward',
+                  value: rewardAmount != null ? '\$${rewardAmount.toStringAsFixed(2)}' : '--',
+                  color: AppColors.profit,
+                ),
+              ),
+              const SizedBox(width: 12),
+              // R:R Ratio
+              Expanded(
+                child: _RRCard(
+                  label: 'R:R',
+                  value: rr != null ? '1:${rr.toStringAsFixed(2)}' : '--',
+                  color: rr != null && rr >= 2 ? AppColors.profit : 
+                         rr != null && rr >= 1 ? AppColors.warning : AppColors.loss,
+                  highlight: rr != null && rr >= 2,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -541,6 +857,17 @@ class _AddTradeScreenState extends State<AddTradeScreen> {
     
     final provider = context.read<TradeProvider>();
     
+    // Parse optional SL/TP values
+    final stopLoss = _stopLossController.text.isNotEmpty 
+        ? double.tryParse(_stopLossController.text) 
+        : null;
+    final takeProfit = _takeProfitController.text.isNotEmpty 
+        ? double.tryParse(_takeProfitController.text) 
+        : null;
+    final setup = _setupController.text.trim().isEmpty 
+        ? null 
+        : _setupController.text.trim();
+    
     bool success;
     
     if (widget.isEditing) {
@@ -556,6 +883,9 @@ class _AddTradeScreenState extends State<AddTradeScreen> {
         notes: _notesController.text.trim().isEmpty 
             ? null 
             : _notesController.text.trim(),
+        stopLoss: stopLoss,
+        takeProfit: takeProfit,
+        setup: setup,
       );
       
       success = await provider.updateTrade(updatedTrade);
@@ -572,6 +902,9 @@ class _AddTradeScreenState extends State<AddTradeScreen> {
         notes: _notesController.text.trim().isEmpty 
             ? null 
             : _notesController.text.trim(),
+        stopLoss: stopLoss,
+        takeProfit: takeProfit,
+        setup: setup,
       );
     }
     
@@ -829,6 +1162,113 @@ class UpperCaseTextFormatter extends TextInputFormatter {
     return TextEditingValue(
       text: newValue.text.toUpperCase(),
       selection: newValue.selection,
+    );
+  }
+}
+
+/// Risk/Reward card widget
+class _RRCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+  final bool highlight;
+
+  const _RRCard({
+    required this.label,
+    required this.value,
+    required this.color,
+    this.highlight = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: highlight ? color.withValues(alpha: 0.15) : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: highlight ? color : AppColors.border,
+        ),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: AppColors.textTertiary,
+              fontSize: 10,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: TextStyle(
+              color: color,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Setup type dropdown
+class _SetupDropdown extends StatelessWidget {
+  final String? value;
+  final ValueChanged<String?> onChanged;
+
+  const _SetupDropdown({
+    required this.value,
+    required this.onChanged,
+  });
+
+  static const List<String> setups = [
+    'Breakout',
+    'Breakdown',
+    'Trend Continuation',
+    'Reversal',
+    'Support Bounce',
+    'Resistance Rejection',
+    'Range Trade',
+    'Momentum',
+    'Gap Fill',
+    'News Trade',
+    'Scalp',
+    'Swing',
+    'Other',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLight,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          hint: const Text(
+            'Select trade setup...',
+            style: TextStyle(color: AppColors.textTertiary),
+          ),
+          isExpanded: true,
+          icon: const Icon(Icons.keyboard_arrow_down_rounded),
+          dropdownColor: AppColors.surface,
+          items: setups.map((setup) {
+            return DropdownMenuItem(
+              value: setup,
+              child: Text(setup),
+            );
+          }).toList(),
+          onChanged: onChanged,
+        ),
+      ),
     );
   }
 }

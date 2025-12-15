@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../state/auth_provider.dart';
+import '../state/theme_provider.dart';
 import '../theme/app_theme.dart';
+import '../widgets/position_size_calculator.dart';
 import '../main.dart' show isFirebaseAvailable;
 
 /// Settings and profile screen
@@ -28,20 +30,7 @@ class SettingsScreen extends StatelessWidget {
           
           // App settings
           _buildSectionHeader(context, 'App Settings'),
-          _buildSettingsTile(
-            context,
-            icon: Icons.palette_rounded,
-            title: 'Theme',
-            subtitle: 'Dark',
-            trailing: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceLight,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Text('Dark', style: TextStyle(fontSize: 12)),
-            ),
-          ),
+          _buildThemeToggle(context),
           _buildSettingsTile(
             context,
             icon: Icons.notifications_rounded,
@@ -59,6 +48,18 @@ class SettingsScreen extends StatelessWidget {
             title: 'Default Currency',
             subtitle: 'USD (\$)',
             onTap: () => _showCurrencyPicker(context),
+          ),
+          
+          const SizedBox(height: 24),
+          
+          // Trading Tools
+          _buildSectionHeader(context, 'Trading Tools'),
+          _buildSettingsTile(
+            context,
+            icon: Icons.calculate_rounded,
+            title: 'Position Size Calculator',
+            subtitle: 'Calculate optimal position based on risk',
+            onTap: () => PositionSizeCalculator.show(context),
           ),
           
           const SizedBox(height: 24),
@@ -233,6 +234,125 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
+  Widget _buildThemeToggle(BuildContext context) {
+    return Consumer<ThemeProvider>(
+      builder: (context, themeProvider, _) {
+        final isDark = themeProvider.isDark;
+        
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: ListTile(
+            onTap: () => _showThemePicker(context, themeProvider),
+            leading: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppColors.accent.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                isDark ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+                color: AppColors.accent,
+                size: 20,
+              ),
+            ),
+            title: const Text('Theme', style: TextStyle(fontWeight: FontWeight.w500)),
+            subtitle: Text(
+              isDark ? 'Dark' : 'Light',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Theme toggle buttons
+                Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceLight,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Row(
+                    children: [
+                      _ThemeButton(
+                        icon: Icons.light_mode_rounded,
+                        isSelected: !isDark,
+                        onTap: () => themeProvider.setThemeMode(ThemeMode.light),
+                      ),
+                      _ThemeButton(
+                        icon: Icons.dark_mode_rounded,
+                        isSelected: isDark,
+                        onTap: () => themeProvider.setThemeMode(ThemeMode.dark),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showThemePicker(BuildContext context, ThemeProvider themeProvider) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Choose Theme', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 16),
+            _ThemeOption(
+              icon: Icons.light_mode_rounded,
+              title: 'Light',
+              subtitle: 'Bright and clean interface',
+              isSelected: themeProvider.themeMode == ThemeMode.light,
+              onTap: () {
+                themeProvider.setThemeMode(ThemeMode.light);
+                Navigator.pop(context);
+              },
+            ),
+            _ThemeOption(
+              icon: Icons.dark_mode_rounded,
+              title: 'Dark',
+              subtitle: 'Easy on the eyes, especially at night',
+              isSelected: themeProvider.themeMode == ThemeMode.dark,
+              onTap: () {
+                themeProvider.setThemeMode(ThemeMode.dark);
+                Navigator.pop(context);
+              },
+            ),
+            _ThemeOption(
+              icon: Icons.settings_brightness_rounded,
+              title: 'System',
+              subtitle: 'Follow your device settings',
+              isSelected: themeProvider.themeMode == ThemeMode.system,
+              onTap: () {
+                themeProvider.setThemeMode(ThemeMode.system);
+                Navigator.pop(context);
+              },
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSettingsTile(
     BuildContext context, {
     required IconData icon,
@@ -357,6 +477,118 @@ class SettingsScreen extends StatelessWidget {
     if (confirm == true && context.mounted) {
       await context.read<AuthProvider>().signOut();
     }
+  }
+}
+
+/// Small theme toggle button
+class _ThemeButton extends StatelessWidget {
+  final IconData icon;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _ThemeButton({
+    required this.icon,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.accent : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Icon(
+          icon,
+          size: 18,
+          color: isSelected ? Colors.black : AppColors.textTertiary,
+        ),
+      ),
+    );
+  }
+}
+
+/// Theme option for the bottom sheet picker
+class _ThemeOption extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _ThemeOption({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isSelected 
+              ? AppColors.accent.withOpacity(0.1)
+              : AppColors.surfaceLight,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? AppColors.accent : AppColors.border,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isSelected 
+                    ? AppColors.accent.withOpacity(0.2)
+                    : AppColors.surface,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                icon,
+                color: isSelected ? AppColors.accent : AppColors.textSecondary,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: isSelected ? AppColors.accent : AppColors.textPrimary,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (isSelected)
+              const Icon(Icons.check_circle_rounded, color: AppColors.accent),
+          ],
+        ),
+      ),
+    );
   }
 }
 

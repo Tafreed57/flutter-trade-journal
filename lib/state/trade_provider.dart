@@ -98,6 +98,9 @@ class TradeProvider extends ChangeNotifier {
     DateTime? exitDate,
     List<String>? tags,
     String? notes,
+    double? stopLoss,
+    double? takeProfit,
+    String? setup,
   }) async {
     try {
       final trade = Trade(
@@ -111,6 +114,9 @@ class TradeProvider extends ChangeNotifier {
         exitDate: exitDate,
         tags: tags,
         notes: notes?.trim(),
+        stopLoss: stopLoss,
+        takeProfit: takeProfit,
+        setup: setup,
       );
       
       await _repository.addTrade(trade);

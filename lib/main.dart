@@ -15,6 +15,7 @@ import 'state/auth_provider.dart';
 import 'state/chart_drawing_provider.dart';
 import 'state/market_data_provider.dart';
 import 'state/paper_trading_provider.dart';
+import 'state/theme_provider.dart';
 import 'state/trade_provider.dart';
 import 'theme/app_theme.dart';
 
@@ -118,12 +119,23 @@ class TradingJournalApp extends StatelessWidget {
         ChangeNotifierProvider<ChartDrawingProvider>(
           create: (_) => ChartDrawingProvider(),
         ),
+
+        // Theme provider for light/dark mode
+        ChangeNotifierProvider<ThemeProvider>(
+          create: (_) => ThemeProvider(),
+        ),
       ],
-      child: MaterialApp(
-        title: 'Trading Journal',
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.darkTheme,
-        home: const AppInitializer(),
+      child: Consumer<ThemeProvider>(
+        builder: (context, themeProvider, _) {
+          return MaterialApp(
+            title: 'Trading Journal',
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.lightTheme,
+            darkTheme: AppTheme.darkTheme,
+            themeMode: themeProvider.themeMode,
+            home: const AppInitializer(),
+          );
+        },
       ),
     );
   }
