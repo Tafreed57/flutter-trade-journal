@@ -103,20 +103,26 @@ class _CandlestickChartState extends State<CandlestickChart>
   Offset _crosshairPosition = Offset.zero;
   Candle? _selectedCandle;
   
-  // Gesture tracking
+  // Gesture tracking for pan/zoom
   double? _panStartOffset;
   double? _scaleStartWidth;
   Offset? _scaleStartFocalPoint;
   Offset? _lastPointerPosition;
+  bool _isPanning = false;  // Track if we're actively panning
   
   // Drawing state
   bool _isDrawing = false;
+  int? _selectedDrawingIndex;     // Which drawing is selected
+  int? _selectedAnchorIndex;      // Which anchor is being dragged (-1 = body)
+  ChartPoint? _dragStartDataPoint; // Data point where drag started
   
   // Animation
   late AnimationController _animController;
   
   // Coordinate converter (recreated on each build with current dimensions)
   ChartCoordinateConverter? _converter;
+  double _chartWidth = 0;  // Cache for gesture handlers
+  double _chartHeight = 0;
   
   // Debug info
   String _debugText = '';
@@ -156,6 +162,10 @@ class _CandlestickChartState extends State<CandlestickChart>
         final timeAxisHeight = constraints.maxHeight * 0.07;
         final chartWidth = constraints.maxWidth - _priceAxisWidth;
         
+        // Cache for gesture handlers
+        _chartWidth = chartWidth;
+        _chartHeight = chartHeight;
+        
         // Create/update coordinate converter
         _converter = ChartCoordinateConverter(
           candles: widget.candles,
@@ -185,38 +195,10 @@ class _CandlestickChartState extends State<CandlestickChart>
           },
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            // Pan gestures for both drawing and chart movement
-            onPanStart: (details) {
-              if (isDrawingMode) {
-                _onDrawingStart(details.localPosition);
-              } else {
-                _onScaleStart(ScaleStartDetails(
-                  focalPoint: details.globalPosition,
-                  localFocalPoint: details.localPosition,
-                ));
-              }
-            },
-            onPanUpdate: (details) {
-              if (isDrawingMode && _isDrawing) {
-                _onDrawingUpdate(details.localPosition);
-              } else if (!isDrawingMode) {
-                _onScaleUpdate(
-                  ScaleUpdateDetails(
-                    focalPoint: details.globalPosition,
-                    localFocalPoint: details.localPosition,
-                    scale: 1.0,
-                  ),
-                  constraints.maxWidth,
-                );
-              }
-            },
-            onPanEnd: (details) {
-              if (isDrawingMode) {
-                _onDrawingEnd();
-              } else {
-                _onScaleEnd(ScaleEndDetails());
-              }
-            },
+            // Pan gestures: for chart panning, drawing creation, or drawing edit
+            onPanStart: (details) => _handlePanStart(details.localPosition, isDrawingMode),
+            onPanUpdate: (details) => _handlePanUpdate(details.localPosition, details.delta, isDrawingMode),
+            onPanEnd: (details) => _handlePanEnd(isDrawingMode),
             // Long press for crosshair in normal mode
             onLongPressStart: isDrawingMode ? null : (d) => _onCrosshairStart(d.localPosition),
             onLongPressMoveUpdate: isDrawingMode ? null : (d) => _onCrosshairMove(d.localPosition),
@@ -387,22 +369,20 @@ class _CandlestickChartState extends State<CandlestickChart>
   }
   
   void _updateDebugText() {
-    if (_converter == null || _lastPointerPosition == null) {
-      _debugText = 'No data';
+    if (_converter == null) {
+      _debugText = 'No converter';
       return;
     }
     
-    final point = _converter!.screenToChartPoint(_lastPointerPosition!);
-    final screenPos = point != null ? _converter!.chartPointToScreen(point) : null;
+    // Use the converter's built-in debug info
+    _debugText = _converter!.debugInfo(_lastPointerPosition);
     
-    _debugText = '''
-Cursor: (${_lastPointerPosition!.dx.toStringAsFixed(1)}, ${_lastPointerPosition!.dy.toStringAsFixed(1)})
-Price: ${point?.price.toStringAsFixed(2) ?? 'N/A'}
-Time: ${point != null ? DateFormat('HH:mm:ss').format(point.timestamp) : 'N/A'}
-Back to screen: ${screenPos != null ? '(${screenPos.dx.toStringAsFixed(1)}, ${screenPos.dy.toStringAsFixed(1)})' : 'N/A'}
-In chart: ${_converter!.isInChartArea(_lastPointerPosition!) ? 'YES' : 'NO'}
-Scroll: ${_scrollOffset.toStringAsFixed(1)}
-''';
+    // Add panning state
+    if (_isPanning) {
+      _debugText += 'State: PANNING\n';
+    } else if (_selectedDrawingIndex != null) {
+      _debugText += 'State: EDITING #$_selectedDrawingIndex\n';
+    }
   }
   
   String _getToolName(DrawingToolType tool) {
@@ -573,6 +553,142 @@ Scroll: ${_scrollOffset.toStringAsFixed(1)}
     });
   }
 
+  // ===========================================================================
+  // UNIFIED GESTURE HANDLING
+  // ===========================================================================
+  
+  /// Handle pan/drag start - determines what action to take
+  void _handlePanStart(Offset localPosition, bool isDrawingMode) {
+    if (_converter == null) return;
+    
+    // First, check if we're clicking on an existing drawing (for selection/move)
+    if (!isDrawingMode) {
+      for (int i = widget.drawings.length - 1; i >= 0; i--) {
+        final drawing = widget.drawings[i];
+        
+        // Check anchors first (for resize)
+        final anchorIndex = _converter!.hitTestAnchors(localPosition, drawing);
+        if (anchorIndex >= 0) {
+          setState(() {
+            _selectedDrawingIndex = i;
+            _selectedAnchorIndex = anchorIndex;
+            _dragStartDataPoint = _converter!.screenToChartPoint(localPosition);
+            _isPanning = false;
+          });
+          return;
+        }
+        
+        // Check body (for move)
+        if (_converter!.hitTestBody(localPosition, drawing)) {
+          setState(() {
+            _selectedDrawingIndex = i;
+            _selectedAnchorIndex = -1; // -1 means dragging body
+            _dragStartDataPoint = _converter!.screenToChartPoint(localPosition);
+            _isPanning = false;
+          });
+          return;
+        }
+      }
+    }
+    
+    // If we're in drawing mode, start a new drawing
+    if (isDrawingMode) {
+      _onDrawingStart(localPosition);
+      return;
+    }
+    
+    // Otherwise, start panning the chart
+    setState(() {
+      _isPanning = true;
+      _panStartOffset = _scrollOffset;
+      _scaleStartFocalPoint = localPosition;
+      _selectedDrawingIndex = null;
+      _selectedAnchorIndex = null;
+    });
+  }
+  
+  /// Handle pan/drag update
+  void _handlePanUpdate(Offset localPosition, Offset delta, bool isDrawingMode) {
+    if (_converter == null) return;
+    
+    // If editing a drawing anchor (resize)
+    if (_selectedDrawingIndex != null && _selectedAnchorIndex != null && _selectedAnchorIndex! >= 0) {
+      _handleDrawingResize(localPosition);
+      return;
+    }
+    
+    // If moving a drawing body
+    if (_selectedDrawingIndex != null && _selectedAnchorIndex == -1) {
+      _handleDrawingMove(localPosition);
+      return;
+    }
+    
+    // If creating a new drawing
+    if (isDrawingMode && _isDrawing) {
+      _onDrawingUpdate(localPosition);
+      return;
+    }
+    
+    // If panning the chart
+    if (_isPanning && _panStartOffset != null && _scaleStartFocalPoint != null) {
+      setState(() {
+        // Calculate delta from start position
+        final dx = _scaleStartFocalPoint!.dx - localPosition.dx;
+        final totalWidth = widget.candles.length * (_candleWidth * (1 + _candleGap));
+        // Allow scrolling to show some "future" space on the right
+        final maxScroll = math.max(0.0, totalWidth - _chartWidth + 100);
+        _scrollOffset = (_panStartOffset! + dx).clamp(0.0, maxScroll);
+        _updateDebugText();
+      });
+    }
+  }
+  
+  /// Handle pan/drag end
+  void _handlePanEnd(bool isDrawingMode) {
+    if (isDrawingMode && _isDrawing) {
+      _onDrawingEnd();
+    }
+    
+    setState(() {
+      _isPanning = false;
+      _panStartOffset = null;
+      _scaleStartFocalPoint = null;
+      _selectedAnchorIndex = null;
+      // Keep _selectedDrawingIndex to show selection
+    });
+  }
+  
+  /// Handle resizing a drawing by dragging an anchor
+  void _handleDrawingResize(Offset localPosition) {
+    if (_selectedDrawingIndex == null || _selectedAnchorIndex == null) return;
+    if (_selectedDrawingIndex! >= widget.drawings.length) return;
+    
+    final newPoint = _converter!.screenToChartPoint(localPosition);
+    if (newPoint == null) return;
+    
+    // TODO: Call back to update drawing anchor in provider
+    // For now, we just update the debug
+    _updateDebugText();
+  }
+  
+  /// Handle moving an entire drawing
+  void _handleDrawingMove(Offset localPosition) {
+    if (_selectedDrawingIndex == null || _dragStartDataPoint == null) return;
+    if (_selectedDrawingIndex! >= widget.drawings.length) return;
+    
+    final newPoint = _converter!.screenToChartPoint(localPosition);
+    if (newPoint == null) return;
+    
+    // Calculate delta in data space
+    final deltaPrice = newPoint.price - _dragStartDataPoint!.price;
+    final deltaTime = newPoint.timestamp.difference(_dragStartDataPoint!.timestamp);
+    
+    // TODO: Call back to update all anchor points in provider
+    // For now, we just update the debug
+    _updateDebugText();
+  }
+  
+  // Legacy methods (kept for compatibility with mouse wheel zoom)
   void _onScaleStart(ScaleStartDetails details) {
     _panStartOffset = _scrollOffset;
     _scaleStartWidth = _candleWidth;
@@ -592,8 +708,7 @@ Scroll: ${_scrollOffset.toStringAsFixed(1)}
       if (_panStartOffset != null && _scaleStartFocalPoint != null) {
         final dx = _scaleStartFocalPoint!.dx - details.localFocalPoint.dx;
         final totalWidth = widget.candles.length * (_candleWidth * (1 + _candleGap));
-        // Max scroll: when the oldest candle is at the right edge
-        final maxScroll = math.max(0.0, totalWidth - chartAreaWidth);
+        final maxScroll = math.max(0.0, totalWidth - chartAreaWidth + 100);
         _scrollOffset = (_panStartOffset! + dx).clamp(0.0, maxScroll);
       }
     });
