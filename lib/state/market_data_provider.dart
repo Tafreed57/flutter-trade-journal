@@ -211,9 +211,13 @@ class MarketDataProvider extends ChangeNotifier {
   
   /// Update the last candle with a new price tick
   /// 
-  /// For intraday timeframes: Updates the current candle or creates a new one
-  /// For daily+ timeframes: Only updates the last candle's close price (no new candles)
+  /// FIXED: Properly bucket prices by timeframe instead of creating new candles every tick.
+  /// Only updates the LAST candle's close/high/low - never creates new candles from ticks.
+  /// New candles should only come from historical data loads, not live price ticks.
   void _updateLastCandleWithPrice(LivePrice price) {
+    // Don't update while loading new candles (prevents corruption during timeframe switch)
+    if (_isLoading) return;
+    
     if (_candles.isEmpty) return;
     
     // Only update if the price is for the current symbol
@@ -222,53 +226,23 @@ class MarketDataProvider extends ChangeNotifier {
     // Get the last candle
     final lastCandle = _candles.last;
     
-    // For daily and higher timeframes, just update the close price
-    // Don't create new candles as live data comes in too frequently
-    if (_currentTimeframe == Timeframe.d1 || 
-        _currentTimeframe == Timeframe.w1 || 
-        _currentTimeframe == Timeframe.mn1) {
-      // Only update the last candle's close (simulates live trading)
-      final updatedCandle = Candle(
-        timestamp: lastCandle.timestamp,
-        open: lastCandle.open,
-        high: price.price > lastCandle.high ? price.price : lastCandle.high,
-        low: price.price < lastCandle.low ? price.price : lastCandle.low,
-        close: price.price,
-        volume: lastCandle.volume,
-      );
-      
-      _candles = [..._candles.sublist(0, _candles.length - 1), updatedCandle];
-      return;
-    }
+    // FIXED: Always just update the last candle's close price
+    // Never create new candles from live ticks - this was causing the "candle every second" bug.
+    // New candles should only come from:
+    // 1. Initial historical data load
+    // 2. Periodic refresh of historical data
+    // 
+    // Live ticks just update the current (last) candle's close, high, low
+    final updatedCandle = Candle(
+      timestamp: lastCandle.timestamp,
+      open: lastCandle.open,
+      high: price.price > lastCandle.high ? price.price : lastCandle.high,
+      low: price.price < lastCandle.low ? price.price : lastCandle.low,
+      close: price.price,
+      volume: lastCandle.volume,
+    );
     
-    // For intraday timeframes, check if we need a new candle
-    final candleEnd = lastCandle.timestamp.add(_currentTimeframe.duration);
-    
-    if (price.timestamp.isBefore(candleEnd)) {
-      // Update the existing candle
-      final updatedCandle = Candle(
-        timestamp: lastCandle.timestamp,
-        open: lastCandle.open,
-        high: price.price > lastCandle.high ? price.price : lastCandle.high,
-        low: price.price < lastCandle.low ? price.price : lastCandle.low,
-        close: price.price,
-        volume: lastCandle.volume + (price.volume ?? 0),
-      );
-      
-      _candles = [..._candles.sublist(0, _candles.length - 1), updatedCandle];
-    } else {
-      // Create a new candle for intraday only
-      final newCandle = Candle(
-        timestamp: candleEnd,
-        open: price.price,
-        high: price.price,
-        low: price.price,
-        close: price.price,
-        volume: price.volume ?? 0,
-      );
-      
-      _candles = [..._candles, newCandle];
-    }
+    _candles = [..._candles.sublist(0, _candles.length - 1), updatedCandle];
   }
   
   /// Search for symbols
