@@ -68,6 +68,13 @@ abstract class MarketDataRepository {
   /// Get quote (current price snapshot) for a symbol
   Future<Quote?> getQuote(String symbol);
 
+  /// Sync the current price for a symbol (used when switching timeframes with cached data)
+  /// This ensures live price updates use the correct baseline price.
+  /// 
+  /// CRITICAL: This prevents the "mega candle" bug where cached data uses a different
+  /// price level than the live price stream.
+  void syncCurrentPrice(String symbol, double price);
+
   /// Check if the WebSocket connection is active
   bool get isConnected;
 

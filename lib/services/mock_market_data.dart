@@ -349,6 +349,15 @@ class MockMarketDataRepository implements MarketDataRepository {
       timestamp: DateTime.now(),
     );
   }
+  
+  /// CRITICAL: Sync the current price when using cached data
+  /// This prevents the "mega candle" bug where the live price stream
+  /// continues from a different price level than the current timeframe's data
+  @override
+  void syncCurrentPrice(String symbol, double price) {
+    Log.d('Syncing price for $symbol: \$${price.toStringAsFixed(2)}');
+    _currentPrices[symbol] = price;
+  }
 
   void _startPriceUpdates() {
     if (_priceUpdateTimer != null) return;

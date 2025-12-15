@@ -201,6 +201,13 @@ class FinnhubMarketDataRepository implements MarketDataRepository {
       throw MarketDataException('Failed to fetch quote', originalError: e);
     }
   }
+  
+  /// For real data, this is a no-op since prices come from the API
+  /// Only needed for mock data to sync the simulated price stream
+  @override
+  void syncCurrentPrice(String symbol, double price) {
+    // No-op for real data - prices come from WebSocket
+  }
 
   @override
   Future<List<SymbolInfo>> searchSymbols(String query) async {

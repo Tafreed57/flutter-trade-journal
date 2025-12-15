@@ -250,6 +250,21 @@ class MarketDataEngine {
     final candles = List<Candle>.from(data.candles);
     final lastCandle = candles.last;
     
+    // INVARIANT CHECK: Detect mega-candle bug early
+    // If the price deviates more than 5% from the current candle's price range,
+    // something is wrong with the price sync
+    final maxExpectedMove = lastCandle.close * 0.05; // 5% tolerance
+    final priceDeviation = (price.price - lastCandle.close).abs();
+    
+    if (priceDeviation > maxExpectedMove) {
+      Log.w('MEGA-CANDLE PREVENTION: Price deviation ${(priceDeviation / lastCandle.close * 100).toStringAsFixed(1)}% detected!');
+      Log.w('  Timeframe: ${currentTimeframe.label}');
+      Log.w('  Last candle OHLC: O=${lastCandle.open.toStringAsFixed(2)}, H=${lastCandle.high.toStringAsFixed(2)}, L=${lastCandle.low.toStringAsFixed(2)}, C=${lastCandle.close.toStringAsFixed(2)}');
+      Log.w('  Incoming price: ${price.price.toStringAsFixed(2)}');
+      Log.w('  Skipping this tick to prevent chart corruption');
+      return; // Skip this tick - it would create a mega candle
+    }
+    
     // Update the last candle
     final updatedCandle = Candle(
       timestamp: lastCandle.timestamp,
@@ -259,6 +274,13 @@ class MarketDataEngine {
       close: price.price,
       volume: lastCandle.volume,
     );
+    
+    // INVARIANT: Validate OHLC relationships
+    assert(updatedCandle.high >= updatedCandle.open, 'High must be >= open');
+    assert(updatedCandle.high >= updatedCandle.close, 'High must be >= close');
+    assert(updatedCandle.low <= updatedCandle.open, 'Low must be <= open');
+    assert(updatedCandle.low <= updatedCandle.close, 'Low must be <= close');
+    assert(updatedCandle.low <= updatedCandle.high, 'Low must be <= high');
     
     candles[candles.length - 1] = updatedCandle;
     

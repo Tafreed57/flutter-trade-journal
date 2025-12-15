@@ -207,6 +207,21 @@ class MarketDataProvider extends ChangeNotifier {
     // Check if we have cached data for this symbol + timeframe
     if (_engine.hasData(_currentSymbol, _currentTimeframe)) {
       Log.i('Using cached data for $_currentSymbol ${_currentTimeframe.label}');
+      
+      // CRITICAL: Sync live price to cached data's last close
+      // This prevents the "mega candle" bug
+      final cachedCandles = _engine.getCandles(_currentSymbol, _currentTimeframe);
+      if (cachedCandles.isNotEmpty) {
+        final syncPrice = cachedCandles.last.close;
+        _lastPrice = LivePrice(
+          symbol: _currentSymbol,
+          price: syncPrice,
+          timestamp: DateTime.now(),
+          volume: 0,
+        );
+        _repository?.syncCurrentPrice(_currentSymbol, syncPrice);
+      }
+      
       notifyListeners();
       subscribeToPrice();
       return;
@@ -233,15 +248,20 @@ class MarketDataProvider extends ChangeNotifier {
       Log.d('Using cached data for $_currentSymbol at ${timeframe.label}');
       
       // CRITICAL: Sync live price to this timeframe's last candle
-      // This prevents the "giant red candle" bug
+      // This prevents the "mega candle" bug
       final cachedCandles = _engine.getCandles(_currentSymbol, timeframe);
       if (cachedCandles.isNotEmpty) {
+        final syncPrice = cachedCandles.last.close;
         _lastPrice = LivePrice(
           symbol: _currentSymbol,
-          price: cachedCandles.last.close,
+          price: syncPrice,
           timestamp: DateTime.now(),
           volume: 0,
         );
+        
+        // CRITICAL: Also sync the repository's current price
+        // Without this, the live price stream continues from the wrong baseline
+        _repository?.syncCurrentPrice(_currentSymbol, syncPrice);
       }
       
       notifyListeners();
