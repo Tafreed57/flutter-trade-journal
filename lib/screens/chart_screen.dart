@@ -110,6 +110,9 @@ class _ChartScreenState extends State<ChartScreen> {
                         ),
                       ),
                       
+                      // Replay controls
+                      _ReplayControls(provider: provider),
+                      
                       // Trading panel
                       const _TradingPanel(),
                     ],
@@ -2146,5 +2149,264 @@ class _RsiPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _RsiPainter oldDelegate) {
     return oldDelegate.candles != candles || oldDelegate.period != period;
+  }
+}
+
+/// Replay Mode Controls
+/// 
+/// Features:
+/// - Live/Replay toggle
+/// - Timeline slider to scrub through history
+/// - Play/Pause controls
+/// - Playback speed selector
+class _ReplayControls extends StatelessWidget {
+  final MarketDataProvider provider;
+  
+  const _ReplayControls({required this.provider});
+  
+  @override
+  Widget build(BuildContext context) {
+    final isReplay = provider.isReplayMode;
+    final (startTime, endTime) = provider.getTimeRange();
+    
+    // Don't show if no data available
+    if (startTime == null || endTime == null) {
+      return const SizedBox.shrink();
+    }
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border(
+          top: BorderSide(color: AppColors.border.withValues(alpha: 0.5)),
+        ),
+      ),
+      child: Row(
+        children: [
+          // Live/Replay toggle
+          _buildModeToggle(isReplay),
+          
+          const SizedBox(width: 12),
+          
+          // Timeline slider (only in replay mode)
+          if (isReplay) ...[
+            // Play/Pause button
+            _buildPlayPauseButton(),
+            
+            const SizedBox(width: 8),
+            
+            // Timeline slider
+            Expanded(
+              child: _buildTimelineSlider(startTime, endTime),
+            ),
+            
+            const SizedBox(width: 8),
+            
+            // Current time display
+            _buildTimeDisplay(),
+            
+            const SizedBox(width: 8),
+            
+            // Speed selector
+            _buildSpeedSelector(),
+          ] else ...[
+            // In live mode, show "Live" indicator
+            Expanded(
+              child: Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.profit,
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.profit.withValues(alpha: 0.5),
+                          blurRadius: 4,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Live Data',
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildModeToggle(bool isReplay) {
+    return GestureDetector(
+      onTap: () {
+        if (isReplay) {
+          provider.exitReplayMode();
+        } else {
+          provider.enterReplayMode();
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isReplay 
+              ? AppColors.accent.withValues(alpha: 0.15)
+              : AppColors.surface,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isReplay ? AppColors.accent : AppColors.border,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isReplay ? Icons.history_rounded : Icons.live_tv_rounded,
+              size: 16,
+              color: isReplay ? AppColors.accent : AppColors.textSecondary,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              isReplay ? 'REPLAY' : 'LIVE',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: isReplay ? AppColors.accent : AppColors.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildPlayPauseButton() {
+    final isPlaying = provider.isPlaying;
+    
+    return GestureDetector(
+      onTap: () {
+        if (isPlaying) {
+          provider.pauseReplay();
+        } else {
+          provider.playReplay();
+        }
+      },
+      child: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          color: AppColors.accent,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Icon(
+          isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+          color: Colors.black,
+          size: 20,
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildTimelineSlider(DateTime startTime, DateTime endTime) {
+    final cursorTime = provider.replayCursorTime ?? startTime;
+    final totalDuration = endTime.difference(startTime).inSeconds.toDouble();
+    final currentPosition = cursorTime.difference(startTime).inSeconds.toDouble();
+    
+    return SliderTheme(
+      data: SliderThemeData(
+        trackHeight: 4,
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+        overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+        activeTrackColor: AppColors.accent,
+        inactiveTrackColor: AppColors.border,
+        thumbColor: AppColors.accent,
+        overlayColor: AppColors.accent.withValues(alpha: 0.2),
+      ),
+      child: Slider(
+        value: currentPosition.clamp(0, totalDuration),
+        min: 0,
+        max: totalDuration > 0 ? totalDuration : 1,
+        onChanged: (value) {
+          final newTime = startTime.add(Duration(seconds: value.toInt()));
+          provider.setReplayCursor(newTime);
+        },
+      ),
+    );
+  }
+  
+  Widget _buildTimeDisplay() {
+    final cursorTime = provider.replayCursorTime;
+    if (cursorTime == null) return const SizedBox.shrink();
+    
+    final timeStr = '${cursorTime.month}/${cursorTime.day} ${cursorTime.hour.toString().padLeft(2, '0')}:${cursorTime.minute.toString().padLeft(2, '0')}';
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLight,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        timeStr,
+        style: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textSecondary,
+          fontFamily: 'monospace',
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildSpeedSelector() {
+    return PopupMenuButton<double>(
+      initialValue: 1.0,
+      onSelected: (speed) {
+        // provider.setPlaybackSpeed(speed); // TODO: Add to provider
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem(value: 0.5, child: Text('0.5x')),
+        const PopupMenuItem(value: 1.0, child: Text('1x')),
+        const PopupMenuItem(value: 2.0, child: Text('2x')),
+        const PopupMenuItem(value: 5.0, child: Text('5x')),
+        const PopupMenuItem(value: 10.0, child: Text('10x')),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '1x',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
+              ),
+            ),
+            SizedBox(width: 4),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 14,
+              color: AppColors.textSecondary,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

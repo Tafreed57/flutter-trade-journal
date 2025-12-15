@@ -1360,7 +1360,7 @@ class _CandlestickPainter extends CustomPainter {
       Rect.fromLTWH(x, bodyTop, candleWidth, bodyHeight),
       bodyPaint,
     );
-    
+
     // Add a thin border for better visibility on small candles
     if (bodyHeight < 4) {
       final borderPaint = Paint()

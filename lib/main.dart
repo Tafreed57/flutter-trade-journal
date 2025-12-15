@@ -13,6 +13,7 @@ import 'screens/auth/auth_gate.dart';
 import 'services/trade_repository.dart';
 import 'state/auth_provider.dart';
 import 'state/chart_drawing_provider.dart';
+import 'services/market_data_engine.dart';
 import 'state/market_data_provider.dart';
 import 'state/paper_trading_provider.dart';
 import 'state/theme_provider.dart';
@@ -57,6 +58,9 @@ void main() async {
   Hive.registerAdapter(OrderSideAdapter());
   Hive.registerAdapter(OrderTypeAdapter());
   Hive.registerAdapter(OrderStatusAdapter());
+
+  // Initialize MarketDataEngine (for chart data persistence)
+  await MarketDataEngine.instance.init();
   Hive.registerAdapter(PaperOrderAdapter());
   Hive.registerAdapter(PaperPositionAdapter());
 

@@ -7,17 +7,23 @@ import '../models/candle.dart';
 import '../models/live_price.dart';
 import '../models/timeframe.dart';
 import '../services/finnhub_repository.dart';
+import '../services/market_data_engine.dart';
 import '../services/market_data_repository.dart';
 import '../services/mock_market_data.dart';
 
 /// State management for market data
 /// 
-/// Handles:
-/// - Loading historical candles
-/// - Real-time price subscriptions
+/// NEW ARCHITECTURE:
+/// - Uses MarketDataEngine for persistence and caching
+/// - Timeframe changes reuse cached data (no regeneration)
+/// - Data persists across app restarts
+/// - Supports replay mode
+/// 
+/// Responsibilities:
 /// - Symbol/timeframe selection
-/// - Error states
-/// - Auto-fallback to mock data when Finnhub fails (free tier limitation)
+/// - Loading data from repository → storing in engine
+/// - Live price subscriptions
+/// - Providing data to UI (via engine)
 class MarketDataProvider extends ChangeNotifier {
   MarketDataRepository? _repository;
   bool _useMockData = false;
@@ -25,7 +31,6 @@ class MarketDataProvider extends ChangeNotifier {
   // Current state
   String _currentSymbol = 'AAPL';
   Timeframe _currentTimeframe = Timeframe.h1;
-  List<Candle> _candles = [];
   LivePrice? _lastPrice;
   bool _isLoading = false;
   String? _error;
@@ -35,10 +40,16 @@ class MarketDataProvider extends ChangeNotifier {
   StreamSubscription<LivePrice>? _priceSubscription;
   StreamSubscription<bool>? _connectionSubscription;
   
+  // Engine reference
+  final MarketDataEngine _engine = MarketDataEngine.instance;
+  
   // Getters
   String get currentSymbol => _currentSymbol;
   Timeframe get currentTimeframe => _currentTimeframe;
-  List<Candle> get candles => List.unmodifiable(_candles);
+  
+  /// Get candles from the engine (not regenerated each time!)
+  List<Candle> get candles => _engine.getCandles(_currentSymbol, _currentTimeframe);
+  
   LivePrice? get lastPrice => _lastPrice;
   bool get isLoading => _isLoading;
   String? get error => _error;
@@ -47,8 +58,35 @@ class MarketDataProvider extends ChangeNotifier {
   bool get isConfigured => EnvConfig.isFinnhubConfigured || _useMockData;
   bool get isMockMode => _useMockData;
   
+  // Replay mode passthrough
+  bool get isReplayMode => _engine.isReplayMode;
+  DateTime? get replayCursorTime => _engine.replayCursorTime;
+  bool get isPlaying => _engine.isPlaying;
+  
   /// Initialize the market data provider
   Future<void> init() async {
+    // Initialize the engine first (loads persisted data)
+    await _engine.init();
+    
+    // Listen to engine changes
+    _engine.addListener(_onEngineUpdate);
+    
+    // Check if we have cached data for current symbol
+    if (_engine.hasData(_currentSymbol)) {
+      Log.i('Loaded cached data for $_currentSymbol');
+      // Data is already available, just notify
+      notifyListeners();
+      
+      // Still connect to live updates
+      await _initRepository();
+      return;
+    }
+    
+    // No cached data, load from repository
+    await _initRepository();
+  }
+  
+  Future<void> _initRepository() async {
     // If no API key, use mock data directly
     if (!EnvConfig.isFinnhubConfigured) {
       Log.i('No Finnhub API key, using mock data');
@@ -96,6 +134,10 @@ class MarketDataProvider extends ChangeNotifier {
     notifyListeners();
   }
   
+  void _onEngineUpdate() {
+    notifyListeners();
+  }
+  
   /// Initialize with mock data (for demo/development)
   Future<void> _initMockData() async {
     // IMPORTANT: Dispose old repository first to stop WebSocket reconnection loops
@@ -127,7 +169,7 @@ class MarketDataProvider extends ChangeNotifier {
     if (_useMockData) {
       await _initMockData();
     } else {
-      await init();
+      await _initRepository();
     }
   }
   
@@ -143,16 +185,36 @@ class MarketDataProvider extends ChangeNotifier {
     _currentSymbol = symbol.toUpperCase();
     _lastPrice = null;
     
+    // Check if we have cached data
+    if (_engine.hasData(_currentSymbol)) {
+      Log.i('Using cached data for $_currentSymbol');
+      notifyListeners();
+      subscribeToPrice();
+      return;
+    }
+    
     // Load new data
     await loadCandles();
     subscribeToPrice();
   }
   
   /// Change the current timeframe
+  /// 
+  /// FIXED: This now uses cached/aggregated data instead of regenerating!
   Future<void> setTimeframe(Timeframe timeframe) async {
     if (timeframe == _currentTimeframe) return;
     
     _currentTimeframe = timeframe;
+    
+    // If we have data, the engine will aggregate it automatically
+    // No need to reload from repository!
+    if (_engine.hasData(_currentSymbol)) {
+      Log.d('Using cached data for $_currentSymbol at ${timeframe.label}');
+      notifyListeners();
+      return;
+    }
+    
+    // No cached data, load from repository
     await loadCandles();
   }
   
@@ -168,15 +230,19 @@ class MarketDataProvider extends ChangeNotifier {
       final now = DateTime.now();
       final from = _currentTimeframe.getFromDate(now);
       
-      _candles = await _repository!.getHistoricalCandles(
+      final newCandles = await _repository!.getHistoricalCandles(
         _currentSymbol,
         _currentTimeframe,
         from,
         now,
       );
       
-      if (_candles.isEmpty) {
+      if (newCandles.isEmpty) {
         _error = 'No data available for $_currentSymbol';
+      } else {
+        // Store in engine (persisted!)
+        await _engine.storeCandles(_currentSymbol, newCandles, _currentTimeframe);
+        Log.i('Stored ${newCandles.length} candles for $_currentSymbol');
       }
       
     } catch (e) {
@@ -202,47 +268,11 @@ class MarketDataProvider extends ChangeNotifier {
         .listen((price) {
       _lastPrice = price;
       
-      // Update the last candle with new price (for live chart updates)
-      _updateLastCandleWithPrice(price);
+      // Update the engine (which updates the last candle)
+      _engine.updateWithLivePrice(_currentSymbol, price, _currentTimeframe);
       
       notifyListeners();
     });
-  }
-  
-  /// Update the last candle with a new price tick
-  /// 
-  /// FIXED: Properly bucket prices by timeframe instead of creating new candles every tick.
-  /// Only updates the LAST candle's close/high/low - never creates new candles from ticks.
-  /// New candles should only come from historical data loads, not live price ticks.
-  void _updateLastCandleWithPrice(LivePrice price) {
-    // Don't update while loading new candles (prevents corruption during timeframe switch)
-    if (_isLoading) return;
-    
-    if (_candles.isEmpty) return;
-    
-    // Only update if the price is for the current symbol
-    if (price.symbol != _currentSymbol) return;
-    
-    // Get the last candle
-    final lastCandle = _candles.last;
-    
-    // FIXED: Always just update the last candle's close price
-    // Never create new candles from live ticks - this was causing the "candle every second" bug.
-    // New candles should only come from:
-    // 1. Initial historical data load
-    // 2. Periodic refresh of historical data
-    // 
-    // Live ticks just update the current (last) candle's close, high, low
-    final updatedCandle = Candle(
-      timestamp: lastCandle.timestamp,
-      open: lastCandle.open,
-      high: price.price > lastCandle.high ? price.price : lastCandle.high,
-      low: price.price < lastCandle.low ? price.price : lastCandle.low,
-      close: price.price,
-      volume: lastCandle.volume,
-    );
-    
-    _candles = [..._candles.sublist(0, _candles.length - 1), updatedCandle];
   }
   
   /// Search for symbols
@@ -271,7 +301,7 @@ class MarketDataProvider extends ChangeNotifier {
     }
   }
   
-  /// Refresh current data
+  /// Refresh current data (force reload from repository)
   Future<void> refresh() async {
     await loadCandles();
   }
@@ -282,12 +312,57 @@ class MarketDataProvider extends ChangeNotifier {
     notifyListeners();
   }
   
+  // ==================== REPLAY MODE ====================
+  
+  /// Enter replay mode
+  void enterReplayMode() {
+    _engine.enterReplayMode();
+    // Set cursor to the start of available data
+    final (start, _) = _engine.getTimeRange(_currentSymbol);
+    if (start != null) {
+      _engine.setReplayCursor(start);
+    }
+  }
+  
+  /// Exit replay mode
+  void exitReplayMode() {
+    _engine.exitReplayMode();
+  }
+  
+  /// Set replay cursor
+  void setReplayCursor(DateTime time) {
+    _engine.setReplayCursor(time);
+  }
+  
+  /// Play replay
+  void playReplay() {
+    _engine.play();
+  }
+  
+  /// Pause replay
+  void pauseReplay() {
+    _engine.pause();
+  }
+  
+  /// Get time range for replay slider
+  (DateTime?, DateTime?) getTimeRange() {
+    return _engine.getTimeRange(_currentSymbol);
+  }
+  
+  // ==================== CLEANUP ====================
+  
+  /// Clear all cached chart data (for debugging)
+  Future<void> clearCache() async {
+    await _engine.clearAllData();
+    await loadCandles();
+  }
+  
   @override
   void dispose() {
     _priceSubscription?.cancel();
     _connectionSubscription?.cancel();
     _repository?.dispose();
+    _engine.removeListener(_onEngineUpdate);
     super.dispose();
   }
 }
-
