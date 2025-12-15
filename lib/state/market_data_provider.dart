@@ -184,6 +184,7 @@ class MarketDataProvider extends ChangeNotifier {
     
     _currentSymbol = symbol.toUpperCase();
     _lastPrice = null;
+    _error = null; // Clear any previous error
     
     // Check if we have cached data for this symbol + timeframe
     if (_engine.hasData(_currentSymbol, _currentTimeframe)) {
@@ -201,10 +202,12 @@ class MarketDataProvider extends ChangeNotifier {
   /// Change the current timeframe
   /// 
   /// FIXED: Each timeframe has its own data series - must load if not cached
+  /// FIXED: Always clear error state when switching timeframes
   Future<void> setTimeframe(Timeframe timeframe) async {
     if (timeframe == _currentTimeframe) return;
     
     _currentTimeframe = timeframe;
+    _error = null; // CRITICAL: Clear error from previous timeframe
     
     // Check if we have cached data for this specific (symbol, timeframe) pair
     if (_engine.hasData(_currentSymbol, timeframe)) {

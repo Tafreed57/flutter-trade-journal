@@ -78,17 +78,23 @@ class MockMarketDataRepository implements MarketDataRepository {
     // Start price with small variance from base
     var currentPrice = basePrice * (0.95 + seededRandom.nextDouble() * 0.10); // ±5%
     
-    // Generate candles going forward from 'from' date
-    var currentTime = _alignToTimeframe(from, timeframe);
+    // FIXED: Find the most recent trading day/time to start from
+    // For weekends or non-trading hours, go back to find valid trading time
+    var startTime = _findLastTradingTime(from, timeframe);
+    var currentTime = _alignToTimeframe(startTime, timeframe);
+    
+    // For short timeframes, ensure we generate enough candles
+    // by calculating an adjusted end time that includes enough trading periods
+    final targetCandleCount = timeframe.defaultCandleCount;
     
     // Safety limit to prevent infinite loops
     int iterations = 0;
-    const maxIterations = 10000;
+    const maxIterations = 20000; // Increased for short timeframes
     
-    while (currentTime.isBefore(to) && iterations < maxIterations) {
+    while (candles.length < targetCandleCount && iterations < maxIterations) {
       iterations++;
       
-      // Skip weekends for stock data
+      // Skip weekends and non-trading hours
       if (_shouldSkipTime(currentTime, timeframe)) {
         currentTime = currentTime.add(intervalDuration);
         continue;
@@ -112,10 +118,23 @@ class MockMarketDataRepository implements MarketDataRepository {
       _currentPrices[symbol] = candles.last.close;
     }
     
-    // Debug: Log candle count to verify
-    // print('Generated ${candles.length} candles for $symbol on ${timeframe.label}');
-    
     return candles;
+  }
+  
+  /// Find the most recent valid trading time before the given time
+  DateTime _findLastTradingTime(DateTime time, Timeframe timeframe) {
+    var adjusted = time;
+    
+    // Go back up to 7 days to find a trading day
+    for (int i = 0; i < 7 * 24 * 60; i++) { // Max 7 days in minutes
+      if (!_shouldSkipTime(adjusted, timeframe)) {
+        return adjusted;
+      }
+      adjusted = adjusted.subtract(const Duration(minutes: 1));
+    }
+    
+    // Fallback: just return the original time minus a week
+    return time.subtract(const Duration(days: 7));
   }
   
   /// Align a datetime to the start of a timeframe period
