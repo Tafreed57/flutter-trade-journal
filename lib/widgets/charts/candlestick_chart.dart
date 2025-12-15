@@ -7,6 +7,7 @@ import '../../models/candle.dart';
 import '../../models/chart_drawing.dart';
 import '../../models/chart_marker.dart';
 import '../../theme/app_theme.dart';
+import 'chart_coordinate_converter.dart';
 
 /// Chart indicator configuration
 class ChartIndicator {
@@ -43,7 +44,8 @@ class ChartIndicator {
 /// - Volume bars
 /// - Current price line
 /// - Trade markers and position lines
-/// - EMA/SMA indicators
+/// - EMA/SMA/RSI indicators
+/// - Drawing tools with accurate coordinate mapping
 class CandlestickChart extends StatefulWidget {
   final List<Candle> candles;
   final double? currentPrice;
@@ -53,6 +55,7 @@ class CandlestickChart extends StatefulWidget {
   final List<ChartLine> positionLines;
   final List<ChartIndicator> indicators;
   final bool showGrid;
+  final bool showDebugOverlay;
   
   // Drawing tools support
   final List<ChartDrawing> drawings;
@@ -72,6 +75,7 @@ class CandlestickChart extends StatefulWidget {
     this.positionLines = const [],
     this.indicators = const [],
     this.showGrid = true,
+    this.showDebugOverlay = false,
     this.drawings = const [],
     this.activeDrawing,
     this.currentTool = DrawingToolType.none,
@@ -91,7 +95,7 @@ class _CandlestickChartState extends State<CandlestickChart>
   double _candleWidth = 10;
   static const double _minCandleWidth = 2;
   static const double _maxCandleWidth = 40;
-  static const double _candleGap = 0.2; // Gap as fraction of candle width
+  static const double _candleGap = 0.2;
   static const double _priceAxisWidth = 60.0;
   
   // Crosshair state
@@ -103,6 +107,7 @@ class _CandlestickChartState extends State<CandlestickChart>
   double? _panStartOffset;
   double? _scaleStartWidth;
   Offset? _scaleStartFocalPoint;
+  Offset? _lastPointerPosition;
   
   // Drawing state
   bool _isDrawing = false;
@@ -110,11 +115,11 @@ class _CandlestickChartState extends State<CandlestickChart>
   // Animation
   late AnimationController _animController;
   
-  // Cache chart dimensions for conversions
-  double _chartWidth = 0;
-  double _chartHeight = 0;
-  double _minPrice = 0;
-  double _maxPrice = 0;
+  // Coordinate converter (recreated on each build with current dimensions)
+  ChartCoordinateConverter? _converter;
+  
+  // Debug info
+  String _debugText = '';
   
   @override
   void initState() {
@@ -149,11 +154,18 @@ class _CandlestickChartState extends State<CandlestickChart>
         final chartHeight = constraints.maxHeight * (widget.showVolume ? 0.78 : 0.92);
         final volumeHeight = constraints.maxHeight * 0.15;
         final timeAxisHeight = constraints.maxHeight * 0.07;
+        final chartWidth = constraints.maxWidth - _priceAxisWidth;
         
-        // Cache dimensions for coordinate conversions
-        _chartWidth = constraints.maxWidth - _priceAxisWidth;
-        _chartHeight = chartHeight;
-        _calculatePriceRange();
+        // Create/update coordinate converter
+        _converter = ChartCoordinateConverter(
+          candles: widget.candles,
+          scrollOffset: _scrollOffset,
+          candleWidth: _candleWidth,
+          candleGap: _candleGap,
+          chartWidth: chartWidth,
+          chartHeight: chartHeight,
+          priceAxisWidth: _priceAxisWidth,
+        );
         
         return Listener(
           // Mouse wheel zoom for desktop
@@ -162,115 +174,160 @@ class _CandlestickChartState extends State<CandlestickChart>
               _handleMouseScroll(event, constraints.maxWidth);
             }
           },
+          onPointerHover: (event) {
+            // Track pointer for debug overlay
+            if (widget.showDebugOverlay) {
+              setState(() {
+                _lastPointerPosition = event.localPosition;
+                _updateDebugText();
+              });
+            }
+          },
           child: GestureDetector(
-            // Use a single gesture recognizer approach to avoid conflicts
             behavior: HitTestBehavior.opaque,
-            // Drawing mode uses pan gestures
-            onPanStart: isDrawingMode 
-                ? (d) => _onDrawingStart(d.localPosition)
-                : (d) => _onScaleStart(ScaleStartDetails(
-                    focalPoint: d.globalPosition,
-                    localFocalPoint: d.localPosition,
-                  )),
-            onPanUpdate: isDrawingMode
-                ? (d) => _onDrawingUpdate(d.localPosition)
-                : (d) => _onScaleUpdate(
-                    ScaleUpdateDetails(
-                      focalPoint: d.globalPosition,
-                      localFocalPoint: d.localPosition,
-                      scale: 1.0,
-                    ),
-                    constraints.maxWidth,
+            // Pan gestures for both drawing and chart movement
+            onPanStart: (details) {
+              if (isDrawingMode) {
+                _onDrawingStart(details.localPosition);
+              } else {
+                _onScaleStart(ScaleStartDetails(
+                  focalPoint: details.globalPosition,
+                  localFocalPoint: details.localPosition,
+                ));
+              }
+            },
+            onPanUpdate: (details) {
+              if (isDrawingMode && _isDrawing) {
+                _onDrawingUpdate(details.localPosition);
+              } else if (!isDrawingMode) {
+                _onScaleUpdate(
+                  ScaleUpdateDetails(
+                    focalPoint: details.globalPosition,
+                    localFocalPoint: details.localPosition,
+                    scale: 1.0,
                   ),
-            onPanEnd: isDrawingMode
-                ? (_) => _onDrawingEnd()
-                : (_) => _onScaleEnd(ScaleEndDetails()),
+                  constraints.maxWidth,
+                );
+              }
+            },
+            onPanEnd: (details) {
+              if (isDrawingMode) {
+                _onDrawingEnd();
+              } else {
+                _onScaleEnd(ScaleEndDetails());
+              }
+            },
             // Long press for crosshair in normal mode
-            onLongPressStart: isDrawingMode ? null : (d) => _onCrosshairStart(d.localPosition, constraints),
-            onLongPressMoveUpdate: isDrawingMode ? null : (d) => _onCrosshairMove(d.localPosition, constraints),
+            onLongPressStart: isDrawingMode ? null : (d) => _onCrosshairStart(d.localPosition),
+            onLongPressMoveUpdate: isDrawingMode ? null : (d) => _onCrosshairMove(d.localPosition),
             onLongPressEnd: isDrawingMode ? null : (_) => _onCrosshairEnd(),
-            // Single tap for horizontal/vertical line tools
-            onTap: isDrawingMode ? () {} : null,
-            onTapDown: isDrawingMode
-                ? (d) => _onDrawingTap(d.localPosition)
-                : null,
+            // Single tap for single-click tools (horizontal/vertical line)
+            onTapDown: isDrawingMode ? (d) => _onDrawingTap(d.localPosition) : null,
             child: MouseRegion(
-              cursor: isDrawingMode ? SystemMouseCursors.precise : SystemMouseCursors.grab,
+              cursor: isDrawingMode 
+                  ? SystemMouseCursors.precise 
+                  : (_showCrosshair ? SystemMouseCursors.none : SystemMouseCursors.grab),
+              onHover: (event) {
+                if (widget.showDebugOverlay) {
+                  setState(() {
+                    _lastPointerPosition = event.localPosition;
+                    _updateDebugText();
+                  });
+                }
+              },
               child: Container(
-                color: Colors.transparent, // Needed for gesture detection
-                child: Column(
+                color: Colors.transparent,
+                child: Stack(
                   children: [
-                    // Main chart
-                    SizedBox(
-                      height: chartHeight,
-                      child: Stack(
-                        children: [
-                          // Chart canvas
-                          ClipRect(
-                            child: CustomPaint(
-                              size: Size(constraints.maxWidth, chartHeight),
-                              painter: _CandlestickPainter(
-                                candles: widget.candles,
-                                scrollOffset: _scrollOffset,
-                                candleWidth: _candleWidth,
-                                candleGap: _candleGap,
-                                currentPrice: widget.currentPrice,
-                                showCrosshair: _showCrosshair || isDrawingMode,
-                                crosshairPosition: _crosshairPosition,
-                                markers: widget.markers,
-                                positionLines: widget.positionLines,
-                                indicators: widget.indicators,
-                                showGrid: widget.showGrid,
-                                drawings: widget.drawings,
-                                activeDrawing: widget.activeDrawing,
+                    Column(
+                      children: [
+                        // Main chart
+                        SizedBox(
+                          height: chartHeight,
+                          child: Stack(
+                            children: [
+                              // Chart canvas
+                              ClipRect(
+                                child: CustomPaint(
+                                  size: Size(constraints.maxWidth, chartHeight),
+                                  painter: _CandlestickPainter(
+                                    candles: widget.candles,
+                                    scrollOffset: _scrollOffset,
+                                    candleWidth: _candleWidth,
+                                    candleGap: _candleGap,
+                                    currentPrice: widget.currentPrice,
+                                    showCrosshair: _showCrosshair || isDrawingMode,
+                                    crosshairPosition: _crosshairPosition,
+                                    markers: widget.markers,
+                                    positionLines: widget.positionLines,
+                                    indicators: widget.indicators,
+                                    showGrid: widget.showGrid,
+                                    drawings: widget.drawings,
+                                    activeDrawing: widget.activeDrawing,
+                                    converter: _converter,
+                                  ),
+                                ),
+                              ),
+                              
+                              // Crosshair tooltip
+                              if (_showCrosshair && _selectedCandle != null && !isDrawingMode)
+                                _buildCrosshairTooltip(_selectedCandle!, constraints),
+                                
+                              // Drawing mode indicator
+                              if (isDrawingMode)
+                                Positioned(
+                                  top: 8,
+                                  left: 8,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.accent.withValues(alpha: 0.9),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(Icons.edit_rounded, size: 14, color: Colors.black),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          _getToolName(widget.currentTool),
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.black,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        
+                        // Volume bars
+                        if (widget.showVolume)
+                          SizedBox(
+                            height: volumeHeight,
+                            child: ClipRect(
+                              child: CustomPaint(
+                                size: Size(constraints.maxWidth, volumeHeight),
+                                painter: _VolumePainter(
+                                  candles: widget.candles,
+                                  scrollOffset: _scrollOffset,
+                                  candleWidth: _candleWidth,
+                                  candleGap: _candleGap,
+                                ),
                               ),
                             ),
                           ),
-                          
-                          // Crosshair tooltip
-                          if (_showCrosshair && _selectedCandle != null && !isDrawingMode)
-                            _buildCrosshairTooltip(_selectedCandle!, constraints),
-                            
-                          // Drawing mode indicator
-                          if (isDrawingMode)
-                            Positioned(
-                              top: 8,
-                              left: 8,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: AppColors.accent.withValues(alpha: 0.9),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(Icons.edit_rounded, size: 14, color: Colors.black),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      _getToolName(widget.currentTool),
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                        color: Colors.black,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    
-                    // Volume bars
-                    if (widget.showVolume)
-                      SizedBox(
-                        height: volumeHeight,
-                        child: ClipRect(
+                        
+                        // Time axis
+                        SizedBox(
+                          height: timeAxisHeight,
                           child: CustomPaint(
-                            size: Size(constraints.maxWidth, volumeHeight),
-                            painter: _VolumePainter(
+                            size: Size(constraints.maxWidth, timeAxisHeight),
+                            painter: _TimeAxisPainter(
                               candles: widget.candles,
                               scrollOffset: _scrollOffset,
                               candleWidth: _candleWidth,
@@ -278,21 +335,47 @@ class _CandlestickChartState extends State<CandlestickChart>
                             ),
                           ),
                         ),
-                      ),
+                      ],
+                    ),
                     
-                    // Time axis
-                    SizedBox(
-                      height: timeAxisHeight,
-                      child: CustomPaint(
-                        size: Size(constraints.maxWidth, timeAxisHeight),
-                        painter: _TimeAxisPainter(
-                          candles: widget.candles,
-                          scrollOffset: _scrollOffset,
-                          candleWidth: _candleWidth,
-                          candleGap: _candleGap,
+                    // Debug overlay
+                    if (widget.showDebugOverlay)
+                      Positioned(
+                        bottom: 8,
+                        left: 8,
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.8),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: AppColors.accent, width: 1),
+                          ),
+                          child: Text(
+                            _debugText,
+                            style: const TextStyle(
+                              color: AppColors.accent,
+                              fontSize: 10,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
                         ),
                       ),
-                    ),
+                      
+                    // Debug: draw anchor point at cursor
+                    if (widget.showDebugOverlay && _lastPointerPosition != null)
+                      Positioned(
+                        left: _lastPointerPosition!.dx - 5,
+                        top: _lastPointerPosition!.dy - 5,
+                        child: Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            color: Colors.red.withValues(alpha: 0.7),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 1),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -301,6 +384,25 @@ class _CandlestickChartState extends State<CandlestickChart>
         );
       },
     );
+  }
+  
+  void _updateDebugText() {
+    if (_converter == null || _lastPointerPosition == null) {
+      _debugText = 'No data';
+      return;
+    }
+    
+    final point = _converter!.screenToChartPoint(_lastPointerPosition!);
+    final screenPos = point != null ? _converter!.chartPointToScreen(point) : null;
+    
+    _debugText = '''
+Cursor: (${_lastPointerPosition!.dx.toStringAsFixed(1)}, ${_lastPointerPosition!.dy.toStringAsFixed(1)})
+Price: ${point?.price.toStringAsFixed(2) ?? 'N/A'}
+Time: ${point != null ? DateFormat('HH:mm:ss').format(point.timestamp) : 'N/A'}
+Back to screen: ${screenPos != null ? '(${screenPos.dx.toStringAsFixed(1)}, ${screenPos.dy.toStringAsFixed(1)})' : 'N/A'}
+In chart: ${_converter!.isInChartArea(_lastPointerPosition!) ? 'YES' : 'NO'}
+Scroll: ${_scrollOffset.toStringAsFixed(1)}
+''';
   }
   
   String _getToolName(DrawingToolType tool) {
@@ -315,85 +417,54 @@ class _CandlestickChartState extends State<CandlestickChart>
     };
   }
   
-  /// Calculate price range for visible candles
-  void _calculatePriceRange() {
-    if (widget.candles.isEmpty) return;
-    
-    final candleStep = _candleWidth * (1 + _candleGap);
-    final visibleCount = (_chartWidth / candleStep).ceil() + 2;
-    final startIndex = (_scrollOffset / candleStep).floor();
-    final endIndex = math.min(startIndex + visibleCount, widget.candles.length);
-    
-    _minPrice = double.infinity;
-    _maxPrice = double.negativeInfinity;
-    
-    for (int i = math.max(0, widget.candles.length - endIndex - 1);
-         i < math.min(widget.candles.length, widget.candles.length - startIndex + 1); i++) {
-      final candle = widget.candles[i];
-      _minPrice = math.min(_minPrice, candle.low);
-      _maxPrice = math.max(_maxPrice, candle.high);
-    }
-    
-    final priceRange = _maxPrice - _minPrice;
-    final padding = priceRange * 0.08;
-    _minPrice -= padding;
-    _maxPrice += padding;
-  }
-  
-  /// Convert screen position to chart point (price + time)
-  ChartPoint _screenToChartPoint(Offset position) {
-    // Price from Y position
-    final price = _maxPrice - (position.dy / _chartHeight) * (_maxPrice - _minPrice);
-    
-    // Time from X position
-    final candleStep = _candleWidth * (1 + _candleGap);
-    final xInChart = position.dx + _scrollOffset;
-    final candleIndex = (xInChart / candleStep).floor();
-    final actualIndex = widget.candles.length - 1 - candleIndex;
-    
-    DateTime timestamp;
-    if (actualIndex >= 0 && actualIndex < widget.candles.length) {
-      timestamp = widget.candles[actualIndex].timestamp;
-    } else {
-      timestamp = DateTime.now();
-    }
-    
-    return ChartPoint(timestamp: timestamp, price: price);
-  }
-  
   // ==================== DRAWING HANDLERS ====================
   
   void _onDrawingTap(Offset position) {
+    if (_converter == null) return;
+    
     // For single-click tools like horizontal/vertical lines
     if (widget.currentTool == DrawingToolType.horizontalLine ||
         widget.currentTool == DrawingToolType.verticalLine) {
-      final point = _screenToChartPoint(position);
-      widget.onDrawingStart?.call(point);
+      final point = _converter!.screenToChartPoint(position);
+      if (point != null) {
+        widget.onDrawingStart?.call(point);
+      }
     }
   }
   
   void _onDrawingStart(Offset position) {
+    if (_converter == null) return;
+    
+    // Only start drawing if in chart area
+    if (!_converter!.isInChartArea(position)) return;
+    
     _isDrawing = true;
-    final point = _screenToChartPoint(position);
-    widget.onDrawingStart?.call(point);
+    final point = _converter!.screenToChartPoint(position);
+    if (point != null) {
+      widget.onDrawingStart?.call(point);
+    }
     setState(() {
       _crosshairPosition = position;
     });
   }
   
   void _onDrawingUpdate(Offset position) {
-    if (!_isDrawing) return;
-    final point = _screenToChartPoint(position);
-    widget.onDrawingUpdate?.call(point);
+    if (!_isDrawing || _converter == null) return;
+    
+    final point = _converter!.screenToChartPoint(position);
+    if (point != null) {
+      widget.onDrawingUpdate?.call(point);
+    }
     setState(() {
       _crosshairPosition = position;
     });
   }
   
   void _onDrawingEnd() {
-    if (!_isDrawing) return;
+    if (!_isDrawing || _converter == null) return;
+    
     _isDrawing = false;
-    final point = _screenToChartPoint(_crosshairPosition);
+    final point = _converter!.screenToChartPoint(_crosshairPosition);
     widget.onDrawingComplete?.call(point);
   }
 
@@ -402,7 +473,6 @@ class _CandlestickChartState extends State<CandlestickChart>
     final change = candle.close - candle.open;
     final changePercent = (change / candle.open) * 100;
     
-    // Position tooltip to avoid edges
     double left = _crosshairPosition.dx + 12;
     if (left + 140 > constraints.maxWidth) {
       left = _crosshairPosition.dx - 152;
@@ -431,7 +501,6 @@ class _CandlestickChartState extends State<CandlestickChart>
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Date/Time
             Text(
               DateFormat('MMM d, yyyy HH:mm').format(candle.timestamp),
               style: const TextStyle(
@@ -440,18 +509,13 @@ class _CandlestickChartState extends State<CandlestickChart>
               ),
             ),
             const SizedBox(height: 6),
-            
-            // OHLC values
             _TooltipRow('O', candle.open.toStringAsFixed(2)),
             _TooltipRow('H', candle.high.toStringAsFixed(2), AppColors.profit),
             _TooltipRow('L', candle.low.toStringAsFixed(2), AppColors.loss),
             _TooltipRow('C', candle.close.toStringAsFixed(2)),
-            
             const SizedBox(height: 4),
             const Divider(height: 1, color: AppColors.border),
             const SizedBox(height: 4),
-            
-            // Change
             Row(
               children: [
                 Icon(
@@ -469,8 +533,6 @@ class _CandlestickChartState extends State<CandlestickChart>
                 ),
               ],
             ),
-            
-            // Volume
             if (candle.volume > 0) ...[
               const SizedBox(height: 2),
               Text(
@@ -498,13 +560,10 @@ class _CandlestickChartState extends State<CandlestickChart>
 
   void _handleMouseScroll(PointerScrollEvent event, double chartWidth) {
     setState(() {
-      // Zoom in/out based on scroll direction
       final zoomFactor = event.scrollDelta.dy > 0 ? 0.9 : 1.1;
       final newWidth = (_candleWidth * zoomFactor).clamp(_minCandleWidth, _maxCandleWidth);
       
-      // Adjust scroll to keep chart centered at mouse position
-      const priceAxisWidth = 60.0;
-      final chartAreaWidth = chartWidth - priceAxisWidth;
+      final chartAreaWidth = chartWidth - _priceAxisWidth;
       final oldTotalWidth = widget.candles.length * (_candleWidth * (1 + _candleGap));
       final newTotalWidth = widget.candles.length * (newWidth * (1 + _candleGap));
       
@@ -522,22 +581,19 @@ class _CandlestickChartState extends State<CandlestickChart>
 
   void _onScaleUpdate(ScaleUpdateDetails details, double chartWidth) {
     setState(() {
-      final priceAxisWidth = 60.0;
-      final chartAreaWidth = chartWidth - priceAxisWidth;
+      final chartAreaWidth = chartWidth - _priceAxisWidth;
       
-      // Handle zoom
       if (details.scale != 1.0 && _scaleStartWidth != null) {
         final newWidth = (_scaleStartWidth! * details.scale)
             .clamp(_minCandleWidth, _maxCandleWidth);
         _candleWidth = newWidth;
       }
       
-      // Handle pan
       if (_panStartOffset != null && _scaleStartFocalPoint != null) {
         final dx = _scaleStartFocalPoint!.dx - details.localFocalPoint.dx;
         final totalWidth = widget.candles.length * (_candleWidth * (1 + _candleGap));
         _scrollOffset = (_panStartOffset! + dx)
-            .clamp(0, math.max(0, totalWidth - chartAreaWidth + priceAxisWidth));
+            .clamp(0, math.max(0, totalWidth - chartAreaWidth + _priceAxisWidth));
       }
     });
   }
@@ -548,27 +604,23 @@ class _CandlestickChartState extends State<CandlestickChart>
     _scaleStartFocalPoint = null;
   }
 
-  void _onCrosshairStart(Offset position, BoxConstraints constraints) {
-    _updateCrosshair(position, constraints);
+  void _onCrosshairStart(Offset position) {
+    _updateCrosshair(position);
   }
 
-  void _onCrosshairMove(Offset position, BoxConstraints constraints) {
-    _updateCrosshair(position, constraints);
+  void _onCrosshairMove(Offset position) {
+    _updateCrosshair(position);
   }
 
-  void _updateCrosshair(Offset position, BoxConstraints constraints) {
-    final candleStep = _candleWidth * (1 + _candleGap);
+  void _updateCrosshair(Offset position) {
+    if (_converter == null) return;
     
-    // Find candle at position
-    final xInChart = position.dx + _scrollOffset;
-    final candleIndex = (xInChart / candleStep).floor();
-    final actualIndex = widget.candles.length - 1 - candleIndex;
-    
-    if (actualIndex >= 0 && actualIndex < widget.candles.length) {
+    final candle = _converter!.candleAtX(position.dx);
+    if (candle != null) {
       setState(() {
         _showCrosshair = true;
         _crosshairPosition = position;
-        _selectedCandle = widget.candles[actualIndex];
+        _selectedCandle = candle;
       });
     }
   }
@@ -635,6 +687,7 @@ class _CandlestickPainter extends CustomPainter {
   final bool showGrid;
   final List<ChartDrawing> drawings;
   final ChartDrawing? activeDrawing;
+  final ChartCoordinateConverter? converter;
 
   static const double priceAxisWidth = 60.0;
 
@@ -652,6 +705,7 @@ class _CandlestickPainter extends CustomPainter {
     this.showGrid = true,
     this.drawings = const [],
     this.activeDrawing,
+    this.converter,
   });
 
   @override
@@ -662,34 +716,32 @@ class _CandlestickPainter extends CustomPainter {
     final chartHeight = size.height;
     final candleStep = candleWidth * (1 + candleGap);
     
+    // Create converter if not provided
+    final conv = converter ?? ChartCoordinateConverter(
+      candles: candles,
+      scrollOffset: scrollOffset,
+      candleWidth: candleWidth,
+      candleGap: candleGap,
+      chartWidth: chartWidth,
+      chartHeight: chartHeight,
+      priceAxisWidth: priceAxisWidth,
+    );
+    
+    final minPrice = conv.minPrice;
+    final maxPrice = conv.maxPrice;
+    
     // Calculate visible range
     final visibleCount = (chartWidth / candleStep).ceil() + 2;
     final startIndex = (scrollOffset / candleStep).floor();
     final endIndex = math.min(startIndex + visibleCount, candles.length);
-    
-    // Get price range for visible candles
-    double minPrice = double.infinity;
-    double maxPrice = double.negativeInfinity;
-    
-    for (int i = math.max(0, candles.length - endIndex - 1).toInt(); 
-         i < math.min(candles.length, candles.length - startIndex + 1).toInt(); i++) {
-      final candle = candles[i];
-      minPrice = math.min(minPrice, candle.low);
-      maxPrice = math.max(maxPrice, candle.high);
-    }
-    
-    // Add padding
-    final priceRange = maxPrice - minPrice;
-    final padding = priceRange * 0.08;
-    minPrice -= padding;
-    maxPrice += padding;
     
     // Draw grid
     _drawGrid(canvas, size, chartWidth, chartHeight, minPrice, maxPrice);
     
     // Draw position lines (SL/TP)
     for (final line in positionLines) {
-      _drawPriceLine(canvas, chartWidth, chartHeight, minPrice, maxPrice, line.price, line.color, line.label, line.isDashed);
+      _drawPriceLine(canvas, chartWidth, chartHeight, minPrice, maxPrice, 
+          line.price, line.color, line.label, line.isDashed);
     }
     
     // Draw candles
@@ -704,7 +756,7 @@ class _CandlestickPainter extends CustomPainter {
       _drawCandle(canvas, candle, x, chartHeight, minPrice, maxPrice);
     }
     
-    // Draw indicators (EMA lines)
+    // Draw indicators
     for (final indicator in indicators) {
       if (indicator.enabled) {
         _drawIndicator(canvas, chartWidth, chartHeight, minPrice, maxPrice, 
@@ -720,14 +772,14 @@ class _CandlestickPainter extends CustomPainter {
     // Draw markers
     _drawMarkers(canvas, chartWidth, chartHeight, minPrice, maxPrice, startIndex, endIndex);
     
-    // Draw all drawings
+    // Draw all drawings using converter
     for (final drawing in drawings) {
-      _drawDrawing(canvas, chartWidth, chartHeight, minPrice, maxPrice, drawing);
+      _drawDrawing(canvas, conv, drawing);
     }
     
-    // Draw active (in-progress) drawing
+    // Draw active drawing
     if (activeDrawing != null) {
-      _drawDrawing(canvas, chartWidth, chartHeight, minPrice, maxPrice, activeDrawing!);
+      _drawDrawing(canvas, conv, activeDrawing!);
     }
     
     // Draw price axis
@@ -739,59 +791,39 @@ class _CandlestickPainter extends CustomPainter {
     }
   }
   
-  /// Draw a chart drawing (line, fib, rectangle, etc.)
-  void _drawDrawing(Canvas canvas, double chartWidth, double chartHeight,
-      double minPrice, double maxPrice, ChartDrawing drawing) {
-    final candleStep = candleWidth * (1 + candleGap);
-    
-    double priceToY(double price) {
-      return chartHeight - ((price - minPrice) / (maxPrice - minPrice)) * chartHeight;
-    }
-    
-    double timeToX(DateTime time) {
-      // Find the closest candle index
-      int candleIndex = 0;
-      for (int i = 0; i < candles.length; i++) {
-        if (!candles[i].timestamp.isAfter(time)) {
-          candleIndex = candles.length - 1 - i;
-        }
-      }
-      return chartWidth - (candleIndex * candleStep) + scrollOffset;
-    }
-    
+  /// Draw a chart drawing using the unified coordinate converter
+  void _drawDrawing(Canvas canvas, ChartCoordinateConverter conv, ChartDrawing drawing) {
     switch (drawing.type) {
       case DrawingToolType.trendLine:
       case DrawingToolType.ray:
         final line = drawing as TrendLineDrawing;
         if (line.endPoint == null) return;
         
-        final x1 = timeToX(line.startPoint.timestamp);
-        final y1 = priceToY(line.startPoint.price);
-        final x2 = timeToX(line.endPoint!.timestamp);
-        final y2 = priceToY(line.endPoint!.price);
+        final p1 = conv.chartPointToScreen(line.startPoint);
+        final p2 = conv.chartPointToScreen(line.endPoint!);
         
         final paint = Paint()
           ..color = line.color
           ..strokeWidth = line.strokeWidth
           ..strokeCap = StrokeCap.round;
         
-        canvas.drawLine(Offset(x1, y1), Offset(x2, y2), paint);
+        canvas.drawLine(p1, p2, paint);
         
-        // Draw anchor points if selected
+        // Draw anchor points
         if (line.isSelected) {
-          final anchorPaint = Paint()
-            ..color = line.color
-            ..style = PaintingStyle.fill;
-          canvas.drawCircle(Offset(x1, y1), 4, anchorPaint);
-          canvas.drawCircle(Offset(x2, y2), 4, anchorPaint);
+          _drawAnchor(canvas, p1, line.color);
+          _drawAnchor(canvas, p2, line.color);
         }
+        // Always draw small dots on endpoints for visibility
+        _drawSmallAnchor(canvas, p1, line.color);
+        _drawSmallAnchor(canvas, p2, line.color);
         break;
         
       case DrawingToolType.horizontalLine:
         final hLine = drawing as HorizontalLineDrawing;
-        final y = priceToY(hLine.price);
+        final y = conv.priceToY(hLine.price);
         
-        if (y < 0 || y > chartHeight) return;
+        if (y < 0 || y > conv.chartHeight) return;
         
         final paint = Paint()
           ..color = hLine.color
@@ -802,10 +834,10 @@ class _CandlestickPainter extends CustomPainter {
         const dashSpace = 4.0;
         double startX = 0;
         
-        while (startX < chartWidth) {
+        while (startX < conv.chartWidth) {
           canvas.drawLine(
             Offset(startX, y),
-            Offset(math.min(startX + dashWidth, chartWidth), y),
+            Offset(math.min(startX + dashWidth, conv.chartWidth), y),
             paint,
           );
           startX += dashWidth + dashSpace;
@@ -815,7 +847,7 @@ class _CandlestickPainter extends CustomPainter {
         final labelBg = Paint()..color = hLine.color;
         canvas.drawRRect(
           RRect.fromRectAndRadius(
-            Rect.fromLTWH(chartWidth, y - 10, priceAxisWidth, 20),
+            Rect.fromLTWH(conv.chartWidth, y - 10, priceAxisWidth, 20),
             const Radius.circular(3),
           ),
           labelBg,
@@ -835,7 +867,7 @@ class _CandlestickPainter extends CustomPainter {
         
         textPainter.paint(
           canvas,
-          Offset(chartWidth + (priceAxisWidth - textPainter.width) / 2, y - 5),
+          Offset(conv.chartWidth + (priceAxisWidth - textPainter.width) / 2, y - 5),
         );
         break;
         
@@ -843,10 +875,10 @@ class _CandlestickPainter extends CustomPainter {
         final fib = drawing as FibonacciDrawing;
         if (fib.endPoint == null) return;
         
-        final x1 = timeToX(fib.startPoint.timestamp);
-        final x2 = timeToX(fib.endPoint!.timestamp);
-        final minX = math.min(x1, x2);
-        final maxX = math.max(x1, x2);
+        final p1 = conv.chartPointToScreen(fib.startPoint);
+        final p2 = conv.chartPointToScreen(fib.endPoint!);
+        final minX = math.min(p1.dx, p2.dx);
+        final maxX = math.max(p1.dx, p2.dx);
         
         final paint = Paint()
           ..color = fib.color
@@ -857,13 +889,11 @@ class _CandlestickPainter extends CustomPainter {
           final price = fib.getPriceForLevel(level);
           if (price == null) continue;
           
-          final y = priceToY(price);
-          if (y < 0 || y > chartHeight) continue;
+          final y = conv.priceToY(price);
+          if (y < 0 || y > conv.chartHeight) continue;
           
-          // Draw level line
           canvas.drawLine(Offset(minX, y), Offset(maxX, y), paint);
           
-          // Draw level label
           final labelText = '${(level * 100).toStringAsFixed(1)}% (${price.toStringAsFixed(2)})';
           final textPainter = TextPainter(
             text: TextSpan(
@@ -880,30 +910,28 @@ class _CandlestickPainter extends CustomPainter {
           textPainter.paint(canvas, Offset(minX + 4, y - 12));
         }
         
-        // Draw boundary box
-        final y1 = priceToY(fib.startPoint.price);
-        final y2 = priceToY(fib.endPoint!.price);
-        
+        // Draw boundary box fill
         final boxPaint = Paint()
           ..color = fib.color.withValues(alpha: 0.1)
           ..style = PaintingStyle.fill;
         
         canvas.drawRect(
-          Rect.fromLTRB(minX, math.min(y1, y2), maxX, math.max(y1, y2)),
+          Rect.fromPoints(p1, p2),
           boxPaint,
         );
+        
+        // Draw anchor points
+        _drawAnchor(canvas, p1, fib.color);
+        _drawAnchor(canvas, p2, fib.color);
         break;
         
       case DrawingToolType.rectangle:
         final rect = drawing as RectangleDrawing;
         if (rect.endPoint == null) return;
         
-        final x1 = timeToX(rect.startPoint.timestamp);
-        final y1 = priceToY(rect.startPoint.price);
-        final x2 = timeToX(rect.endPoint!.timestamp);
-        final y2 = priceToY(rect.endPoint!.price);
-        
-        final rectBounds = Rect.fromPoints(Offset(x1, y1), Offset(x2, y2));
+        final p1 = conv.chartPointToScreen(rect.startPoint);
+        final p2 = conv.chartPointToScreen(rect.endPoint!);
+        final rectBounds = Rect.fromPoints(p1, p2);
         
         // Fill
         if (rect.filled) {
@@ -920,25 +948,45 @@ class _CandlestickPainter extends CustomPainter {
           ..style = PaintingStyle.stroke;
         canvas.drawRect(rectBounds, borderPaint);
         
-        // Draw anchor points if selected
+        // Draw anchor points at corners
         if (rect.isSelected) {
-          final anchorPaint = Paint()
-            ..color = rect.color
-            ..style = PaintingStyle.fill;
-          canvas.drawCircle(Offset(x1, y1), 4, anchorPaint);
-          canvas.drawCircle(Offset(x2, y2), 4, anchorPaint);
-          canvas.drawCircle(Offset(x1, y2), 4, anchorPaint);
-          canvas.drawCircle(Offset(x2, y1), 4, anchorPaint);
+          _drawAnchor(canvas, Offset(p1.dx, p1.dy), rect.color);
+          _drawAnchor(canvas, Offset(p2.dx, p2.dy), rect.color);
+          _drawAnchor(canvas, Offset(p1.dx, p2.dy), rect.color);
+          _drawAnchor(canvas, Offset(p2.dx, p1.dy), rect.color);
         }
+        // Always show small anchors
+        _drawSmallAnchor(canvas, p1, rect.color);
+        _drawSmallAnchor(canvas, p2, rect.color);
         break;
         
       case DrawingToolType.verticalLine:
-        // TODO: Implement vertical line drawing
+        // TODO: Implement vertical line
         break;
         
       case DrawingToolType.none:
         break;
     }
+  }
+  
+  void _drawAnchor(Canvas canvas, Offset point, Color color) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(point, 5, paint);
+    
+    final borderPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    canvas.drawCircle(point, 5, borderPaint);
+  }
+  
+  void _drawSmallAnchor(Canvas canvas, Offset point, Color color) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(point, 3, paint);
   }
 
   void _drawGrid(Canvas canvas, Size size, double chartWidth, double chartHeight,
@@ -949,7 +997,6 @@ class _CandlestickPainter extends CustomPainter {
       ..color = AppColors.border.withValues(alpha: 0.3)
       ..strokeWidth = 0.5;
     
-    // Horizontal grid lines (price levels)
     final priceStep = _calculatePriceStep(maxPrice - minPrice);
     var price = (minPrice / priceStep).ceil() * priceStep;
     
@@ -972,21 +1019,18 @@ class _CandlestickPainter extends CustomPainter {
     return 0.01;
   }
 
-  /// Calculate EMA values for the given period
   List<double?> _calculateEMA(int period) {
     if (candles.length < period) return List.filled(candles.length, null);
     
     final emaValues = List<double?>.filled(candles.length, null);
     final multiplier = 2 / (period + 1);
     
-    // Calculate initial SMA for first EMA value
     double sum = 0;
     for (int i = 0; i < period; i++) {
       sum += candles[i].close;
     }
     emaValues[period - 1] = sum / period;
     
-    // Calculate EMA for remaining values
     for (int i = period; i < candles.length; i++) {
       final prevEma = emaValues[i - 1]!;
       emaValues[i] = (candles[i].close - prevEma) * multiplier + prevEma;
@@ -995,7 +1039,6 @@ class _CandlestickPainter extends CustomPainter {
     return emaValues;
   }
 
-  /// Draw an indicator line on the chart
   void _drawIndicator(
     Canvas canvas,
     double chartWidth,
@@ -1056,14 +1099,12 @@ class _CandlestickPainter extends CustomPainter {
       ..color = color
       ..strokeWidth = 1;
     
-    // Draw wick
     canvas.drawLine(
       Offset(x + candleWidth / 2, highY),
       Offset(x + candleWidth / 2, lowY),
       wickPaint,
     );
     
-    // Draw body
     final bodyTop = math.min(openY, closeY);
     final bodyBottom = math.max(openY, closeY);
     final bodyHeight = math.max(1.0, bodyBottom - bodyTop);
@@ -1087,7 +1128,6 @@ class _CandlestickPainter extends CustomPainter {
     
     if (y < 0 || y > chartHeight) return;
     
-    // Dashed line
     final paint = Paint()
       ..color = AppColors.accent
       ..strokeWidth = 1;
@@ -1105,7 +1145,6 @@ class _CandlestickPainter extends CustomPainter {
       startX += dashWidth + dashSpace;
     }
     
-    // Price label
     final labelBg = Paint()..color = AppColors.accent;
     canvas.drawRRect(
       RRect.fromRectAndRadius(
@@ -1193,7 +1232,6 @@ class _CandlestickPainter extends CustomPainter {
     final candleStep = candleWidth * (1 + candleGap);
     
     for (final marker in markers) {
-      // Find candle index for marker timestamp
       int? candleIndex;
       for (int i = 0; i < candles.length; i++) {
         if (marker.timestamp.isAfter(candles[i].timestamp) ||
@@ -1234,7 +1272,6 @@ class _CandlestickPainter extends CustomPainter {
     
     canvas.drawCircle(Offset(x, y), size / 2, borderPaint);
     
-    // Draw arrow for entry markers
     if (marker.isEntry) {
       final arrowPaint = Paint()
         ..color = Colors.white
@@ -1258,14 +1295,12 @@ class _CandlestickPainter extends CustomPainter {
       double minPrice, double maxPrice) {
     final chartWidth = size.width - priceAxisWidth;
     
-    // Background
     final bgPaint = Paint()..color = AppColors.surface;
     canvas.drawRect(
       Rect.fromLTWH(chartWidth, 0, priceAxisWidth, chartHeight),
       bgPaint,
     );
     
-    // Border
     final borderPaint = Paint()
       ..color = AppColors.border
       ..strokeWidth = 1;
@@ -1275,7 +1310,6 @@ class _CandlestickPainter extends CustomPainter {
       borderPaint,
     );
     
-    // Price labels
     final priceStep = _calculatePriceStep(maxPrice - minPrice);
     var price = (minPrice / priceStep).ceil() * priceStep;
     
@@ -1311,21 +1345,18 @@ class _CandlestickPainter extends CustomPainter {
       ..color = AppColors.textSecondary.withValues(alpha: 0.5)
       ..strokeWidth = 0.5;
     
-    // Vertical line
     canvas.drawLine(
       Offset(crosshairPosition.dx, 0),
       Offset(crosshairPosition.dx, chartHeight),
       paint,
     );
     
-    // Horizontal line
     canvas.drawLine(
       Offset(0, crosshairPosition.dy),
       Offset(chartWidth, crosshairPosition.dy),
       paint,
     );
     
-    // Price at crosshair
     final price = maxPrice - (crosshairPosition.dy / chartHeight) * (maxPrice - minPrice);
     
     final bgPaint = Paint()..color = AppColors.surfaceLight;
@@ -1396,12 +1427,10 @@ class _VolumePainter extends CustomPainter {
     final chartHeight = size.height;
     final candleStep = candleWidth * (1 + candleGap);
     
-    // Calculate visible range
     final visibleCount = (chartWidth / candleStep).ceil() + 2;
     final startIndex = (scrollOffset / candleStep).floor();
     final endIndex = math.min(startIndex + visibleCount, candles.length);
     
-    // Get max volume for visible candles
     double maxVolume = 0;
     for (int i = math.max(0, candles.length - endIndex - 1).toInt();
          i < math.min(candles.length, candles.length - startIndex + 1).toInt(); i++) {
@@ -1410,7 +1439,6 @@ class _VolumePainter extends CustomPainter {
     
     if (maxVolume == 0) return;
     
-    // Draw volume bars
     for (int i = startIndex; i < endIndex; i++) {
       if (i < 0 || i >= candles.length) continue;
       
@@ -1464,7 +1492,6 @@ class _TimeAxisPainter extends CustomPainter {
     final chartWidth = size.width - priceAxisWidth;
     final candleStep = candleWidth * (1 + candleGap);
     
-    // Calculate label interval
     final minLabelSpacing = 70.0;
     final labelInterval = (minLabelSpacing / candleStep).ceil();
     
@@ -1472,7 +1499,6 @@ class _TimeAxisPainter extends CustomPainter {
     final startIndex = (scrollOffset / candleStep).floor();
     final endIndex = math.min(startIndex + visibleCount, candles.length);
     
-    // Draw time labels
     for (int i = startIndex; i < endIndex; i += labelInterval) {
       if (i < 0 || i >= candles.length) continue;
       

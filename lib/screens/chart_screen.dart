@@ -9,6 +9,7 @@ import '../state/paper_trading_provider.dart';
 import '../state/trade_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/charts/candlestick_chart.dart';
+import '../widgets/position_size_calculator.dart';
 
 export '../widgets/charts/candlestick_chart.dart' show ChartIndicator;
 
@@ -32,10 +33,17 @@ class ChartScreen extends StatefulWidget {
 class _ChartScreenState extends State<ChartScreen> {
   // Chart settings
   bool _showGrid = true;
+  bool _showDebugOverlay = false;
+  bool _showLeftPanel = false;
+  
+  // RSI panel visibility
+  bool _showRsiPanel = false;
+  
   final List<ChartIndicator> _indicators = [
     ChartIndicator(name: 'EMA', period: 9, color: const Color(0xFFFFD700), enabled: false),
     ChartIndicator(name: 'EMA', period: 21, color: const Color(0xFF00BFFF), enabled: false),
-    ChartIndicator(name: 'EMA', period: 50, color: const Color(0xFFFF69B4), enabled: false),
+    ChartIndicator(name: 'SMA', period: 50, color: const Color(0xFFFF69B4), enabled: false),
+    ChartIndicator(name: 'SMA', period: 200, color: const Color(0xFF9370DB), enabled: false),
   ];
 
   @override
@@ -69,22 +77,48 @@ class _ChartScreenState extends State<ChartScreen> {
               });
             }
             
-            return Column(
+            return Row(
               children: [
-                // Header bar
-                _buildHeader(provider),
+                // Left sidebar with tools
+                _buildLeftSidebar(),
                 
-                // OHLC stats + timeframes
-                _buildStatsAndTimeframes(provider),
-                
-                // Chart area
+                // Main content
                 Expanded(
-                  flex: 3,
-                  child: _buildChartArea(provider),
+                  child: Column(
+                    children: [
+                      // Header bar
+                      _buildHeader(provider),
+                      
+                      // OHLC stats + timeframes
+                      _buildStatsAndTimeframes(provider),
+                      
+                      // Chart area + RSI panel
+                      Expanded(
+                        flex: 3,
+                        child: Column(
+                          children: [
+                            // Main chart
+                            Expanded(
+                              flex: _showRsiPanel ? 3 : 1,
+                              child: _buildChartArea(provider),
+                            ),
+                            
+                            // RSI Panel (separate oscillator)
+                            if (_showRsiPanel)
+                              _RsiPanel(candles: provider.candles),
+                          ],
+                        ),
+                      ),
+                      
+                      // Trading panel
+                      const _TradingPanel(),
+                    ],
+                  ),
                 ),
                 
-                // Trading panel
-                const _TradingPanel(),
+                // Position size calculator panel (right side when open)
+                if (_showLeftPanel)
+                  _buildPositionSizePanel(),
               ],
             );
           },
@@ -425,10 +459,147 @@ class _ChartScreenState extends State<ChartScreen> {
                 );
               }),
               
+              const SizedBox(height: 8),
+              
+              // RSI toggle
+              SwitchListTile(
+                title: const Text('RSI (14)'),
+                subtitle: const Text('Relative Strength Index'),
+                value: _showRsiPanel,
+                onChanged: (v) {
+                  setSheetState(() => _showRsiPanel = v);
+                  setState(() => _showRsiPanel = v);
+                },
+                activeTrackColor: const Color(0xFFE91E63),
+                contentPadding: EdgeInsets.zero,
+              ),
+              
+              const Divider(color: AppColors.border),
+              const SizedBox(height: 8),
+              
+              // Debug overlay toggle
+              SwitchListTile(
+                title: const Text('Debug Overlay'),
+                subtitle: const Text('Show coordinate debug info'),
+                value: _showDebugOverlay,
+                onChanged: (v) {
+                  setSheetState(() => _showDebugOverlay = v);
+                  setState(() => _showDebugOverlay = v);
+                },
+                activeTrackColor: AppColors.warning,
+                contentPadding: EdgeInsets.zero,
+              ),
+              
               const SizedBox(height: 16),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// Left sidebar with quick access tools
+  Widget _buildLeftSidebar() {
+    return Container(
+      width: 48,
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border(right: BorderSide(color: AppColors.border)),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          
+          // Position size calculator
+          _LeftSidebarButton(
+            icon: Icons.calculate_rounded,
+            label: 'Position Size',
+            isSelected: _showLeftPanel,
+            onTap: () => setState(() => _showLeftPanel = !_showLeftPanel),
+          ),
+          
+          const SizedBox(height: 4),
+          
+          // RSI toggle
+          _LeftSidebarButton(
+            icon: Icons.show_chart_rounded,
+            label: 'RSI',
+            isSelected: _showRsiPanel,
+            onTap: () => setState(() => _showRsiPanel = !_showRsiPanel),
+          ),
+          
+          const SizedBox(height: 4),
+          
+          // Indicators quick access
+          _LeftSidebarButton(
+            icon: Icons.timeline_rounded,
+            label: 'Indicators',
+            isSelected: _indicators.any((i) => i.enabled),
+            onTap: () => _showChartSettings(context),
+          ),
+          
+          const Spacer(),
+          
+          // Debug toggle
+          _LeftSidebarButton(
+            icon: Icons.bug_report_outlined,
+            label: 'Debug',
+            isSelected: _showDebugOverlay,
+            onTap: () => setState(() => _showDebugOverlay = !_showDebugOverlay),
+            small: true,
+          ),
+          
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+  
+  /// Position size calculator panel
+  Widget _buildPositionSizePanel() {
+    return Container(
+      width: 320,
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border(left: BorderSide(color: AppColors.border)),
+      ),
+      child: Column(
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: AppColors.border)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.calculate_rounded, color: AppColors.accent, size: 20),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Position Size Calculator',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => setState(() => _showLeftPanel = false),
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  color: AppColors.textSecondary,
+                ),
+              ],
+            ),
+          ),
+          
+          // Calculator
+          const Expanded(
+            child: PositionSizeCalculator(),
+          ),
+        ],
       ),
     );
   }
@@ -543,6 +714,7 @@ class _ChartScreenState extends State<ChartScreen> {
             positionLines: positionLines,
             indicators: _indicators.where((i) => i.enabled).toList(),
             showGrid: _showGrid,
+            showDebugOverlay: _showDebugOverlay,
             drawings: drawingProvider.drawings,
             activeDrawing: drawingProvider.activeDrawing,
             currentTool: drawingProvider.currentTool,
@@ -1668,5 +1840,311 @@ class _DrawingToolButton extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Left sidebar button
+class _LeftSidebarButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+  final bool small;
+
+  const _LeftSidebarButton({
+    required this.icon,
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+    this.small = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: label,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 36,
+          height: small ? 28 : 36,
+          decoration: BoxDecoration(
+            color: isSelected 
+                ? AppColors.accent.withValues(alpha: 0.2)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: isSelected ? AppColors.accent : Colors.transparent,
+              width: 1,
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: small ? 16 : 20,
+            color: isSelected ? AppColors.accent : AppColors.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// RSI Panel - Separate oscillator panel below the main chart
+class _RsiPanel extends StatelessWidget {
+  final List<dynamic> candles;
+  
+  const _RsiPanel({required this.candles});
+  
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 100,
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: Stack(
+        children: [
+          // RSI chart
+          CustomPaint(
+            size: const Size(double.infinity, 100),
+            painter: _RsiPainter(
+              candles: candles,
+              period: 14,
+            ),
+          ),
+          
+          // Label
+          Positioned(
+            top: 4,
+            left: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE91E63).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text(
+                'RSI (14)',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFFE91E63),
+                ),
+              ),
+            ),
+          ),
+          
+          // Level lines
+          Positioned(
+            right: 8,
+            top: 4,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                _RsiLevelLabel('70', const Color(0xFFE91E63)),
+                const SizedBox(height: 24),
+                _RsiLevelLabel('50', AppColors.textSecondary),
+                const SizedBox(height: 24),
+                _RsiLevelLabel('30', AppColors.profit),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RsiLevelLabel extends StatelessWidget {
+  final String level;
+  final Color color;
+  
+  const _RsiLevelLabel(this.level, this.color);
+  
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      level,
+      style: TextStyle(
+        fontSize: 9,
+        color: color,
+        fontWeight: FontWeight.w500,
+      ),
+    );
+  }
+}
+
+/// RSI Painter
+class _RsiPainter extends CustomPainter {
+  final List<dynamic> candles;
+  final int period;
+  
+  _RsiPainter({required this.candles, this.period = 14});
+  
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (candles.length < period + 1) return;
+    
+    // Calculate RSI values
+    final rsiValues = _calculateRsi();
+    if (rsiValues.isEmpty) return;
+    
+    final chartWidth = size.width - 40; // Reserve space for labels
+    final chartHeight = size.height - 10;
+    
+    // Draw overbought/oversold zones
+    final zonePaint = Paint()
+      ..style = PaintingStyle.fill;
+    
+    // Overbought zone (70-100)
+    zonePaint.color = const Color(0xFFE91E63).withValues(alpha: 0.1);
+    canvas.drawRect(
+      Rect.fromLTRB(0, 0, chartWidth, chartHeight * 0.3),
+      zonePaint,
+    );
+    
+    // Oversold zone (0-30)
+    zonePaint.color = AppColors.profit.withValues(alpha: 0.1);
+    canvas.drawRect(
+      Rect.fromLTRB(0, chartHeight * 0.7, chartWidth, chartHeight),
+      zonePaint,
+    );
+    
+    // Draw level lines
+    final linePaint = Paint()
+      ..color = AppColors.border.withValues(alpha: 0.5)
+      ..strokeWidth = 0.5;
+    
+    // 70 line
+    canvas.drawLine(
+      Offset(0, chartHeight * 0.3),
+      Offset(chartWidth, chartHeight * 0.3),
+      linePaint,
+    );
+    
+    // 50 line
+    canvas.drawLine(
+      Offset(0, chartHeight * 0.5),
+      Offset(chartWidth, chartHeight * 0.5),
+      linePaint,
+    );
+    
+    // 30 line
+    canvas.drawLine(
+      Offset(0, chartHeight * 0.7),
+      Offset(chartWidth, chartHeight * 0.7),
+      linePaint,
+    );
+    
+    // Draw RSI line
+    final rsiPaint = Paint()
+      ..color = const Color(0xFFE91E63)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    
+    final path = Path();
+    bool started = false;
+    
+    final step = chartWidth / rsiValues.length;
+    
+    for (int i = 0; i < rsiValues.length; i++) {
+      final rsi = rsiValues[i];
+      if (rsi == null) continue;
+      
+      final x = i * step;
+      final y = chartHeight - (rsi / 100) * chartHeight;
+      
+      if (!started) {
+        path.moveTo(x, y);
+        started = true;
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    
+    canvas.drawPath(path, rsiPaint);
+    
+    // Draw current RSI value
+    final lastRsi = rsiValues.lastWhere((r) => r != null, orElse: () => null);
+    if (lastRsi != null) {
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: lastRsi.toStringAsFixed(1),
+          style: TextStyle(
+            color: lastRsi > 70 
+                ? const Color(0xFFE91E63)
+                : lastRsi < 30 
+                    ? AppColors.profit 
+                    : AppColors.textPrimary,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      
+      textPainter.paint(
+        canvas,
+        Offset(chartWidth + 4, chartHeight - (lastRsi / 100) * chartHeight - 6),
+      );
+    }
+  }
+  
+  List<double?> _calculateRsi() {
+    if (candles.length < period + 1) return [];
+    
+    final rsiValues = List<double?>.filled(candles.length, null);
+    final gains = <double>[];
+    final losses = <double>[];
+    
+    // Calculate initial gains and losses
+    for (int i = 1; i <= period; i++) {
+      final change = candles[i].close - candles[i - 1].close;
+      if (change > 0) {
+        gains.add(change);
+        losses.add(0);
+      } else {
+        gains.add(0);
+        losses.add(-change);
+      }
+    }
+    
+    double avgGain = gains.reduce((a, b) => a + b) / period;
+    double avgLoss = losses.reduce((a, b) => a + b) / period;
+    
+    // First RSI value
+    if (avgLoss == 0) {
+      rsiValues[period] = 100;
+    } else {
+      final rs = avgGain / avgLoss;
+      rsiValues[period] = 100 - (100 / (1 + rs));
+    }
+    
+    // Calculate remaining RSI values using smoothed averages
+    for (int i = period + 1; i < candles.length; i++) {
+      final change = candles[i].close - candles[i - 1].close;
+      final currentGain = change > 0 ? change : 0.0;
+      final currentLoss = change < 0 ? -change : 0.0;
+      
+      avgGain = ((avgGain * (period - 1)) + currentGain) / period;
+      avgLoss = ((avgLoss * (period - 1)) + currentLoss) / period;
+      
+      if (avgLoss == 0) {
+        rsiValues[i] = 100;
+      } else {
+        final rs = avgGain / avgLoss;
+        rsiValues[i] = 100 - (100 / (1 + rs));
+      }
+    }
+    
+    return rsiValues;
+  }
+  
+  @override
+  bool shouldRepaint(covariant _RsiPainter oldDelegate) {
+    return oldDelegate.candles != candles || oldDelegate.period != period;
   }
 }
