@@ -71,9 +71,9 @@ class MarketDataProvider extends ChangeNotifier {
     // Listen to engine changes
     _engine.addListener(_onEngineUpdate);
     
-    // Check if we have cached data for current symbol
-    if (_engine.hasData(_currentSymbol)) {
-      Log.i('Loaded cached data for $_currentSymbol');
+    // Check if we have cached data for current symbol + timeframe
+    if (_engine.hasData(_currentSymbol, _currentTimeframe)) {
+      Log.i('Loaded cached data for $_currentSymbol ${_currentTimeframe.label}');
       // Data is already available, just notify
       notifyListeners();
       
@@ -185,9 +185,9 @@ class MarketDataProvider extends ChangeNotifier {
     _currentSymbol = symbol.toUpperCase();
     _lastPrice = null;
     
-    // Check if we have cached data
-    if (_engine.hasData(_currentSymbol)) {
-      Log.i('Using cached data for $_currentSymbol');
+    // Check if we have cached data for this symbol + timeframe
+    if (_engine.hasData(_currentSymbol, _currentTimeframe)) {
+      Log.i('Using cached data for $_currentSymbol ${_currentTimeframe.label}');
       notifyListeners();
       subscribeToPrice();
       return;
@@ -200,21 +200,21 @@ class MarketDataProvider extends ChangeNotifier {
   
   /// Change the current timeframe
   /// 
-  /// FIXED: This now uses cached/aggregated data instead of regenerating!
+  /// FIXED: Each timeframe has its own data series - must load if not cached
   Future<void> setTimeframe(Timeframe timeframe) async {
     if (timeframe == _currentTimeframe) return;
     
     _currentTimeframe = timeframe;
     
-    // If we have data, the engine will aggregate it automatically
-    // No need to reload from repository!
-    if (_engine.hasData(_currentSymbol)) {
+    // Check if we have cached data for this specific (symbol, timeframe) pair
+    if (_engine.hasData(_currentSymbol, timeframe)) {
       Log.d('Using cached data for $_currentSymbol at ${timeframe.label}');
       notifyListeners();
       return;
     }
     
-    // No cached data, load from repository
+    // No cached data for this timeframe - must load from repository
+    Log.d('Loading new data for $_currentSymbol at ${timeframe.label}');
     await loadCandles();
   }
   
@@ -317,8 +317,8 @@ class MarketDataProvider extends ChangeNotifier {
   /// Enter replay mode
   void enterReplayMode() {
     _engine.enterReplayMode();
-    // Set cursor to the start of available data
-    final (start, _) = _engine.getTimeRange(_currentSymbol);
+    // Set cursor to the start of available data for current timeframe
+    final (start, _) = _engine.getTimeRange(_currentSymbol, _currentTimeframe);
     if (start != null) {
       _engine.setReplayCursor(start);
     }
@@ -346,7 +346,7 @@ class MarketDataProvider extends ChangeNotifier {
   
   /// Get time range for replay slider
   (DateTime?, DateTime?) getTimeRange() {
-    return _engine.getTimeRange(_currentSymbol);
+    return _engine.getTimeRange(_currentSymbol, _currentTimeframe);
   }
   
   // ==================== CLEANUP ====================

@@ -1,27 +1,45 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../core/logger.dart';
 import '../models/candle.dart';
 import '../models/live_price.dart';
 import '../models/timeframe.dart';
 
-/// Persisted candle data for a symbol
+/// Key for storing candles: symbol + timeframe
+class CandleKey {
+  final String symbol;
+  final Timeframe timeframe;
+  
+  CandleKey(this.symbol, this.timeframe);
+  
+  String get key => '${symbol}_${timeframe.name}';
+  
+  @override
+  bool operator ==(Object other) =>
+      other is CandleKey && other.symbol == symbol && other.timeframe == timeframe;
+  
+  @override
+  int get hashCode => symbol.hashCode ^ timeframe.hashCode;
+}
+
+/// Persisted candle data for a symbol + timeframe
 class PersistedCandleData {
   final String symbol;
-  final Timeframe baseTimeframe;
+  final Timeframe timeframe;
   final List<Candle> candles;
   final DateTime lastUpdated;
   
   PersistedCandleData({
     required this.symbol,
-    required this.baseTimeframe,
+    required this.timeframe,
     required this.candles,
     required this.lastUpdated,
   });
   
   Map<String, dynamic> toJson() => {
     'symbol': symbol,
-    'baseTimeframe': baseTimeframe.index,
+    'timeframe': timeframe.index,
     'lastUpdated': lastUpdated.millisecondsSinceEpoch,
     'candles': candles.map((c) => {
       'timestamp': c.timestamp.millisecondsSinceEpoch,
@@ -45,7 +63,7 @@ class PersistedCandleData {
     
     return PersistedCandleData(
       symbol: json['symbol'] as String,
-      baseTimeframe: Timeframe.values[json['baseTimeframe'] as int],
+      timeframe: Timeframe.values[json['timeframe'] as int],
       candles: candlesList,
       lastUpdated: DateTime.fromMillisecondsSinceEpoch(json['lastUpdated'] as int),
     );
@@ -53,19 +71,14 @@ class PersistedCandleData {
 }
 
 /// Central market data engine that manages:
-/// - Raw candle storage (persisted)
-/// - Aggregation cache per timeframe
+/// - Candle storage per (symbol, timeframe) pair
 /// - Live price updates
 /// - Replay state
 /// 
-/// Architecture:
-/// ```
-/// MarketDataEngine
-/// ├── _rawCandleStore: Persisted base timeframe candles (Hive)
-/// ├── _aggregationCache: Map<Timeframe, List<Candle>>
-/// ├── LivePriceHandler: Updates last candle in real-time
-/// └── ReplayController: Manages replay mode state
-/// ```
+/// FIXED ARCHITECTURE:
+/// - Each (symbol, timeframe) pair has its own candle series
+/// - No more "aggregation from base timeframe" which couldn't disaggregate
+/// - Timeframe switching now properly loads different data
 class MarketDataEngine {
   static MarketDataEngine? _instance;
   static MarketDataEngine get instance => _instance ??= MarketDataEngine._();
@@ -74,14 +87,12 @@ class MarketDataEngine {
   
   // Persistence
   Box<String>? _candleBox;
-  static const String _boxName = 'candle_history';
-  static const int _maxCandlesPerSymbol = 2000; // Cap history size
+  static const String _boxName = 'candle_history_v2'; // New version for new format
+  static const int _maxCandlesPerSeries = 2000;
   
-  // Raw candle storage (base timeframe = m1 or m5)
-  final Map<String, PersistedCandleData> _rawCandleStore = {};
-  
-  // Aggregation cache: symbol -> timeframe -> candles
-  final Map<String, Map<Timeframe, List<Candle>>> _aggregationCache = {};
+  // Candle storage: keyed by "symbol_timeframe"
+  // FIXED: Each timeframe has its own series (not derived from a base)
+  final Map<String, PersistedCandleData> _candleStore = {};
   
   // Replay state
   bool _isReplayMode = false;
@@ -104,7 +115,7 @@ class MarketDataEngine {
     try {
       _candleBox = await Hive.openBox<String>(_boxName);
       await _loadPersistedData();
-      Log.i('MarketDataEngine initialized with ${_rawCandleStore.length} symbols');
+      Log.i('MarketDataEngine initialized with ${_candleStore.length} series');
     } catch (e) {
       Log.e('MarketDataEngine init error', e);
     }
@@ -118,12 +129,11 @@ class MarketDataEngine {
       try {
         final jsonStr = _candleBox!.get(key);
         if (jsonStr != null) {
-          final json = _parseJson(jsonStr);
-          if (json != null) {
-            final data = PersistedCandleData.fromJson(json);
-            _rawCandleStore[data.symbol] = data;
-            Log.d('Loaded ${data.candles.length} candles for ${data.symbol}');
-          }
+          final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+          final data = PersistedCandleData.fromJson(json);
+          final storeKey = CandleKey(data.symbol, data.timeframe).key;
+          _candleStore[storeKey] = data;
+          Log.d('Loaded ${data.candles.length} candles for ${data.symbol} ${data.timeframe.label}');
         }
       } catch (e) {
         Log.e('Error loading persisted data for $key', e);
@@ -131,28 +141,15 @@ class MarketDataEngine {
     }
   }
   
-  Map<String, dynamic>? _parseJson(String jsonStr) {
-    try {
-      // Simple JSON parsing for our format
-      return Map<String, dynamic>.from(
-        Uri.splitQueryString(jsonStr).map((k, v) => MapEntry(k, v))
-      );
-    } catch (e) {
-      // Try dart:convert if simple parse fails
-      try {
-        return null; // Will implement proper JSON parsing
-      } catch (e2) {
-        return null;
-      }
-    }
-  }
-  
-  /// Store candles for a symbol (base timeframe)
+  /// Store candles for a symbol + timeframe pair
+  /// FIXED: Each timeframe is stored separately
   Future<void> storeCandles(String symbol, List<Candle> candles, Timeframe timeframe) async {
     if (candles.isEmpty) return;
     
-    // Get existing data
-    final existing = _rawCandleStore[symbol];
+    final storeKey = CandleKey(symbol, timeframe).key;
+    
+    // Get existing data for this specific series
+    final existing = _candleStore[storeKey];
     List<Candle> mergedCandles;
     
     if (existing != null) {
@@ -166,26 +163,24 @@ class MarketDataEngine {
     mergedCandles.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     
     // Cap size
-    if (mergedCandles.length > _maxCandlesPerSymbol) {
-      mergedCandles = mergedCandles.sublist(mergedCandles.length - _maxCandlesPerSymbol);
+    if (mergedCandles.length > _maxCandlesPerSeries) {
+      mergedCandles = mergedCandles.sublist(mergedCandles.length - _maxCandlesPerSeries);
     }
     
     // Store
     final data = PersistedCandleData(
       symbol: symbol,
-      baseTimeframe: timeframe,
+      timeframe: timeframe,
       candles: mergedCandles,
       lastUpdated: DateTime.now(),
     );
     
-    _rawCandleStore[symbol] = data;
-    
-    // Clear aggregation cache for this symbol (will be rebuilt on demand)
-    _aggregationCache.remove(symbol);
+    _candleStore[storeKey] = data;
     
     // Persist to Hive
-    await _persistData(symbol, data);
+    await _persistData(storeKey, data);
     
+    Log.d('Stored ${mergedCandles.length} candles for $symbol ${timeframe.label}');
     _notifyListeners();
   }
   
@@ -207,60 +202,30 @@ class MarketDataEngine {
   }
   
   /// Persist data to Hive
-  Future<void> _persistData(String symbol, PersistedCandleData data) async {
+  Future<void> _persistData(String key, PersistedCandleData data) async {
     if (_candleBox == null) return;
     
     try {
-      // Simple serialization (could use json_serializable for production)
-      final json = data.toJson();
-      // For now, store as stringified format
-      // In production, use proper JSON encoding
-      await _candleBox!.put(symbol, _encodeData(json));
+      final jsonStr = jsonEncode(data.toJson());
+      await _candleBox!.put(key, jsonStr);
     } catch (e) {
-      Log.e('Error persisting data for $symbol', e);
+      Log.e('Error persisting data for $key', e);
     }
-  }
-  
-  String _encodeData(Map<String, dynamic> json) {
-    // Simple encoding - in production use dart:convert
-    final buffer = StringBuffer();
-    buffer.write('symbol=${json['symbol']}&');
-    buffer.write('baseTimeframe=${json['baseTimeframe']}&');
-    buffer.write('lastUpdated=${json['lastUpdated']}&');
-    buffer.write('candleCount=${(json['candles'] as List).length}');
-    // Note: This is simplified - full implementation would serialize all candle data
-    return buffer.toString();
   }
   
   /// Get candles for a symbol at a specific timeframe
-  /// Uses cache or aggregates from raw data
+  /// FIXED: Returns the specific series for this (symbol, timeframe) pair
   List<Candle> getCandles(String symbol, Timeframe timeframe) {
-    // Check cache first
-    final cache = _aggregationCache[symbol];
-    if (cache != null && cache.containsKey(timeframe)) {
-      final candles = cache[timeframe]!;
-      return _applyReplayFilter(candles);
-    }
+    final storeKey = CandleKey(symbol, timeframe).key;
+    final data = _candleStore[storeKey];
     
-    // Get raw data
-    final rawData = _rawCandleStore[symbol];
-    if (rawData == null) {
+    if (data == null) {
+      Log.d('No candles found for $symbol ${timeframe.label}');
       return [];
     }
     
-    // If same timeframe as raw, return directly
-    if (rawData.baseTimeframe == timeframe) {
-      return _applyReplayFilter(rawData.candles);
-    }
-    
-    // Aggregate to requested timeframe
-    final aggregated = _aggregateCandles(rawData.candles, rawData.baseTimeframe, timeframe);
-    
-    // Cache the result
-    _aggregationCache.putIfAbsent(symbol, () => {});
-    _aggregationCache[symbol]![timeframe] = aggregated;
-    
-    return _applyReplayFilter(aggregated);
+    Log.d('Returning ${data.candles.length} candles for $symbol ${timeframe.label}');
+    return _applyReplayFilter(data.candles);
   }
   
   /// Apply replay filter (only show candles <= cursor time)
@@ -272,87 +237,17 @@ class MarketDataEngine {
     return candles.where((c) => !c.timestamp.isAfter(_replayCursorTime!)).toList();
   }
   
-  /// Aggregate candles from one timeframe to another
-  List<Candle> _aggregateCandles(List<Candle> source, Timeframe from, Timeframe to) {
-    if (source.isEmpty) return [];
-    
-    // Can only aggregate to larger timeframes
-    if (to.duration <= from.duration) {
-      return source;
-    }
-    
-    final Map<int, List<Candle>> buckets = {};
-    
-    for (final candle in source) {
-      final bucketStart = _getBucketStart(candle.timestamp, to);
-      final bucketKey = bucketStart.millisecondsSinceEpoch;
-      
-      buckets.putIfAbsent(bucketKey, () => []);
-      buckets[bucketKey]!.add(candle);
-    }
-    
-    final aggregated = <Candle>[];
-    
-    for (final entry in buckets.entries) {
-      final bucket = entry.value;
-      if (bucket.isEmpty) continue;
-      
-      // Sort bucket by time
-      bucket.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      
-      final open = bucket.first.open;
-      final close = bucket.last.close;
-      final high = bucket.map((c) => c.high).reduce((a, b) => a > b ? a : b);
-      final low = bucket.map((c) => c.low).reduce((a, b) => a < b ? a : b);
-      final volume = bucket.map((c) => c.volume).reduce((a, b) => a + b);
-      
-      aggregated.add(Candle(
-        timestamp: DateTime.fromMillisecondsSinceEpoch(entry.key),
-        open: open,
-        high: high,
-        low: low,
-        close: close,
-        volume: volume,
-      ));
-    }
-    
-    aggregated.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    return aggregated;
-  }
-  
-  /// Get the start of a timeframe bucket for a given timestamp
-  DateTime _getBucketStart(DateTime time, Timeframe timeframe) {
-    switch (timeframe) {
-      case Timeframe.m1:
-        return DateTime(time.year, time.month, time.day, time.hour, time.minute);
-      case Timeframe.m5:
-        return DateTime(time.year, time.month, time.day, time.hour, (time.minute ~/ 5) * 5);
-      case Timeframe.m15:
-        return DateTime(time.year, time.month, time.day, time.hour, (time.minute ~/ 15) * 15);
-      case Timeframe.m30:
-        return DateTime(time.year, time.month, time.day, time.hour, (time.minute ~/ 30) * 30);
-      case Timeframe.h1:
-        return DateTime(time.year, time.month, time.day, time.hour);
-      case Timeframe.h4:
-        return DateTime(time.year, time.month, time.day, (time.hour ~/ 4) * 4);
-      case Timeframe.d1:
-        return DateTime(time.year, time.month, time.day);
-      case Timeframe.w1:
-        final weekday = time.weekday;
-        return DateTime(time.year, time.month, time.day - (weekday - 1));
-      case Timeframe.mn1:
-        return DateTime(time.year, time.month, 1);
-    }
-  }
-  
   /// Update the last candle with a live price tick
+  /// FIXED: Updates the specific timeframe series
   void updateWithLivePrice(String symbol, LivePrice price, Timeframe currentTimeframe) {
-    if (_isReplayMode) return; // Don't update in replay mode
+    if (_isReplayMode) return;
     
-    final rawData = _rawCandleStore[symbol];
-    if (rawData == null || rawData.candles.isEmpty) return;
+    final storeKey = CandleKey(symbol, currentTimeframe).key;
+    final data = _candleStore[storeKey];
     
-    final candles = List<Candle>.from(rawData.candles);
+    if (data == null || data.candles.isEmpty) return;
+    
+    final candles = List<Candle>.from(data.candles);
     final lastCandle = candles.last;
     
     // Update the last candle
@@ -367,29 +262,35 @@ class MarketDataEngine {
     
     candles[candles.length - 1] = updatedCandle;
     
-    // Update store (without persisting every tick)
-    _rawCandleStore[symbol] = PersistedCandleData(
+    // Update store (without persisting every tick for performance)
+    _candleStore[storeKey] = PersistedCandleData(
       symbol: symbol,
-      baseTimeframe: rawData.baseTimeframe,
+      timeframe: currentTimeframe,
       candles: candles,
       lastUpdated: DateTime.now(),
     );
     
-    // Clear aggregation cache
-    _aggregationCache.remove(symbol);
-    
     _notifyListeners();
   }
   
-  /// Check if we have data for a symbol
-  bool hasData(String symbol) => _rawCandleStore.containsKey(symbol);
+  /// Check if we have data for a symbol + timeframe pair
+  /// FIXED: Checks specific timeframe, not just symbol
+  bool hasData(String symbol, Timeframe timeframe) {
+    final storeKey = CandleKey(symbol, timeframe).key;
+    final data = _candleStore[storeKey];
+    return data != null && data.candles.isNotEmpty;
+  }
   
-  /// Get the last update time for a symbol
-  DateTime? getLastUpdateTime(String symbol) => _rawCandleStore[symbol]?.lastUpdated;
+  /// Get the last update time for a symbol + timeframe
+  DateTime? getLastUpdateTime(String symbol, Timeframe timeframe) {
+    final storeKey = CandleKey(symbol, timeframe).key;
+    return _candleStore[storeKey]?.lastUpdated;
+  }
   
-  /// Get available time range for a symbol
-  (DateTime?, DateTime?) getTimeRange(String symbol) {
-    final data = _rawCandleStore[symbol];
+  /// Get available time range for a symbol + timeframe
+  (DateTime?, DateTime?) getTimeRange(String symbol, Timeframe timeframe) {
+    final storeKey = CandleKey(symbol, timeframe).key;
+    final data = _candleStore[storeKey];
     if (data == null || data.candles.isEmpty) {
       return (null, null);
     }
@@ -480,8 +381,7 @@ class MarketDataEngine {
   
   /// Clear all cached data (for debugging)
   Future<void> clearAllData() async {
-    _rawCandleStore.clear();
-    _aggregationCache.clear();
+    _candleStore.clear();
     await _candleBox?.clear();
     _notifyListeners();
   }
@@ -494,4 +394,3 @@ class MarketDataEngine {
 }
 
 typedef VoidCallback = void Function();
-
