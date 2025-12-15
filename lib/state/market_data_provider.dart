@@ -203,6 +203,7 @@ class MarketDataProvider extends ChangeNotifier {
   /// 
   /// FIXED: Each timeframe has its own data series - must load if not cached
   /// FIXED: Always clear error state when switching timeframes
+  /// FIXED: Sync live price to current timeframe's last candle
   Future<void> setTimeframe(Timeframe timeframe) async {
     if (timeframe == _currentTimeframe) return;
     
@@ -212,6 +213,19 @@ class MarketDataProvider extends ChangeNotifier {
     // Check if we have cached data for this specific (symbol, timeframe) pair
     if (_engine.hasData(_currentSymbol, timeframe)) {
       Log.d('Using cached data for $_currentSymbol at ${timeframe.label}');
+      
+      // CRITICAL: Sync live price to this timeframe's last candle
+      // This prevents the "giant red candle" bug
+      final cachedCandles = _engine.getCandles(_currentSymbol, timeframe);
+      if (cachedCandles.isNotEmpty) {
+        _lastPrice = LivePrice(
+          symbol: _currentSymbol,
+          price: cachedCandles.last.close,
+          timestamp: DateTime.now(),
+          volume: 0,
+        );
+      }
+      
       notifyListeners();
       return;
     }
@@ -246,6 +260,16 @@ class MarketDataProvider extends ChangeNotifier {
         // Store in engine (persisted!)
         await _engine.storeCandles(_currentSymbol, newCandles, _currentTimeframe);
         Log.i('Stored ${newCandles.length} candles for $_currentSymbol');
+        
+        // CRITICAL: Sync live price to the last candle's close
+        // This prevents the "giant red candle" bug where live price
+        // comes from a different timeframe's last close
+        _lastPrice = LivePrice(
+          symbol: _currentSymbol,
+          price: newCandles.last.close,
+          timestamp: DateTime.now(),
+          volume: 0,
+        );
       }
       
     } catch (e) {

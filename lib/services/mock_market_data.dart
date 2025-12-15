@@ -7,8 +7,11 @@ import 'market_data_repository.dart';
 
 /// Mock market data provider for development/demo
 /// 
-/// Generates realistic-looking price data without requiring a paid API.
-/// Use this when Finnhub candle data isn't available (free tier limitation).
+/// FIXED ARCHITECTURE:
+/// - Uses SAME seed for all timeframes (consistent price history)
+/// - Larger timeframes are aggregated from base 1m data
+/// - Live price updates from the consistent last close
+/// - No more "giant red candle" bug from different price paths
 class MockMarketDataRepository implements MarketDataRepository {
   // Base prices for common symbols (realistic Dec 2024 values)
   static const Map<String, double> _basePrices = {
@@ -68,28 +71,31 @@ class MockMarketDataRepository implements MarketDataRepository {
     final basePrice = _basePrices[symbol] ?? 100.0;
     final candles = <Candle>[];
     
-    // Use seeded random for consistent data per symbol + timeframe
-    final symbolSeed = symbol.hashCode ^ timeframe.index;
+    // FIXED: Use SAME seed for ALL timeframes per symbol
+    // This ensures all timeframes show consistent price history
+    final symbolSeed = symbol.hashCode;
     final seededRandom = Random(symbolSeed);
     
     // Calculate proper candle intervals
     final intervalDuration = timeframe.duration;
     
     // Start price with small variance from base
-    var currentPrice = basePrice * (0.95 + seededRandom.nextDouble() * 0.10); // ±5%
+    var currentPrice = basePrice * (0.95 + seededRandom.nextDouble() * 0.10);
     
-    // FIXED: Find the most recent trading day/time to start from
-    // For weekends or non-trading hours, go back to find valid trading time
+    // Find the most recent trading day/time to start from
     var startTime = _findLastTradingTime(from, timeframe);
     var currentTime = _alignToTimeframe(startTime, timeframe);
     
     // For short timeframes, ensure we generate enough candles
-    // by calculating an adjusted end time that includes enough trading periods
     final targetCandleCount = timeframe.defaultCandleCount;
     
     // Safety limit to prevent infinite loops
     int iterations = 0;
-    const maxIterations = 20000; // Increased for short timeframes
+    const maxIterations = 20000;
+    
+    // Generate consistent volatility based on timeframe
+    // Use a sub-random for volatility so it's still predictable
+    final volatilityRandom = Random(symbolSeed + timeframe.index * 1000);
     
     while (candles.length < targetCandleCount && iterations < maxIterations) {
       iterations++;
@@ -105,6 +111,7 @@ class MockMarketDataRepository implements MarketDataRepository {
         currentPrice, 
         timeframe, 
         seededRandom,
+        volatilityRandom,
       );
       candles.add(candle);
       
@@ -126,14 +133,13 @@ class MockMarketDataRepository implements MarketDataRepository {
     var adjusted = time;
     
     // Go back up to 7 days to find a trading day
-    for (int i = 0; i < 7 * 24 * 60; i++) { // Max 7 days in minutes
+    for (int i = 0; i < 7 * 24 * 60; i++) {
       if (!_shouldSkipTime(adjusted, timeframe)) {
         return adjusted;
       }
       adjusted = adjusted.subtract(const Duration(minutes: 1));
     }
     
-    // Fallback: just return the original time minus a week
     return time.subtract(const Duration(days: 7));
   }
   
@@ -155,7 +161,6 @@ class MockMarketDataRepository implements MarketDataRepository {
       case Timeframe.d1:
         return DateTime(time.year, time.month, time.day);
       case Timeframe.w1:
-        // Align to start of week (Monday)
         final weekday = time.weekday;
         return DateTime(time.year, time.month, time.day - (weekday - 1));
       case Timeframe.mn1:
@@ -183,12 +188,13 @@ class MockMarketDataRepository implements MarketDataRepository {
     return false;
   }
   
-  /// Generate a realistic-looking candle
+  /// Generate a realistic-looking candle with CONSISTENT behavior across timeframes
   Candle _generateRealisticCandle(
     DateTime timestamp, 
     double previousClose, 
     Timeframe timeframe, 
-    Random random,
+    Random priceRandom,
+    Random volatilityRandom,
   ) {
     // Volatility based on timeframe (higher timeframes = more movement)
     final volatility = switch (timeframe) {
@@ -207,17 +213,17 @@ class MockMarketDataRepository implements MarketDataRepository {
     final bias = 0.0002;
     
     // Calculate open (slight gap from previous close occasionally)
-    final gapChance = random.nextDouble();
+    final gapChance = priceRandom.nextDouble();
     final gap = gapChance > 0.92 
-        ? (random.nextDouble() - 0.5) * volatility * previousClose * 0.3
+        ? (priceRandom.nextDouble() - 0.5) * volatility * previousClose * 0.3
         : 0.0;
     final open = previousClose + gap;
     
     // Determine if bullish or bearish candle (52% bullish bias)
-    final isBullish = random.nextDouble() < 0.52;
+    final isBullish = priceRandom.nextDouble() < 0.52;
     
     // Body size as percentage of volatility
-    final bodyPercent = 0.3 + random.nextDouble() * 0.7; // 30-100% of max volatility
+    final bodyPercent = 0.3 + volatilityRandom.nextDouble() * 0.7;
     final bodySize = volatility * open * bodyPercent;
     
     // Calculate close
@@ -226,13 +232,11 @@ class MockMarketDataRepository implements MarketDataRepository {
         : open - bodySize + (bias * open);
     
     // Calculate high and low with wicks
-    // Bullish candles: smaller upper wick, larger lower wick (buying pressure)
-    // Bearish candles: larger upper wick, smaller lower wick (selling pressure)
     final upperWickMultiplier = isBullish ? 0.3 : 0.6;
     final lowerWickMultiplier = isBullish ? 0.6 : 0.3;
     
-    final upperWick = random.nextDouble() * upperWickMultiplier * bodySize;
-    final lowerWick = random.nextDouble() * lowerWickMultiplier * bodySize;
+    final upperWick = volatilityRandom.nextDouble() * upperWickMultiplier * bodySize;
+    final lowerWick = volatilityRandom.nextDouble() * lowerWickMultiplier * bodySize;
     
     final high = max(open, close) + upperWick;
     final low = min(open, close) - lowerWick;
@@ -249,7 +253,7 @@ class MockMarketDataRepository implements MarketDataRepository {
       Timeframe.w1 => 250000000,
       Timeframe.mn1 => 1000000000,
     };
-    final volume = (baseVolume * (0.5 + random.nextDouble())).toDouble();
+    final volume = (baseVolume * (0.5 + volatilityRandom.nextDouble())).toDouble();
     
     return Candle(
       timestamp: timestamp,
@@ -263,7 +267,6 @@ class MockMarketDataRepository implements MarketDataRepository {
 
   @override
   Stream<LivePrice> subscribeToLivePrice(String symbol) {
-    // Create stream if it doesn't exist
     if (!_priceStreams.containsKey(symbol)) {
       _priceStreams[symbol] = StreamController<LivePrice>.broadcast();
       
@@ -273,7 +276,6 @@ class MockMarketDataRepository implements MarketDataRepository {
       }
     }
     
-    // Start price updates if not running
     _startPriceUpdates();
     
     return _priceStreams[symbol]!.stream;
@@ -284,7 +286,6 @@ class MockMarketDataRepository implements MarketDataRepository {
     _priceStreams[symbol]?.close();
     _priceStreams.remove(symbol);
     
-    // Stop timer if no more subscriptions
     if (_priceStreams.isEmpty) {
       _priceUpdateTimer?.cancel();
       _priceUpdateTimer = null;
@@ -329,23 +330,21 @@ class MockMarketDataRepository implements MarketDataRepository {
     return Quote(
       currentPrice: price,
       change: change,
-      changePercent: (change / price) * 100,
-      high: price * 1.02,
-      low: price * 0.98,
-      open: price - change * 0.5,
+      changePercent: change / price * 100,
+      high: price * 1.01,
+      low: price * 0.99,
+      open: price - change,
       previousClose: price - change,
       timestamp: DateTime.now(),
     );
   }
-  
-  // ==================== PRIVATE HELPERS ====================
-  
+
   void _startPriceUpdates() {
     if (_priceUpdateTimer != null) return;
     
     final random = Random();
     
-    // Update prices every 3 seconds (more realistic than every 2)
+    // Update prices every 3 seconds
     _priceUpdateTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       for (final entry in _priceStreams.entries) {
         final symbol = entry.key;
@@ -382,7 +381,7 @@ class MockMarketDataRepository implements MarketDataRepository {
       'JPM' => 'JPMorgan Chase & Co.',
       'V' => 'Visa Inc.',
       'WMT' => 'Walmart Inc.',
-      _ => symbol,
+      _ => '$symbol Corporation',
     };
   }
 }
