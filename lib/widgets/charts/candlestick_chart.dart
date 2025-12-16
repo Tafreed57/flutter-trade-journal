@@ -3,9 +3,11 @@ import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 import '../../models/candle.dart';
 import '../../models/chart_drawing.dart';
 import '../../models/chart_marker.dart';
+import '../../state/chart_drawing_provider.dart';
 import '../../theme/app_theme.dart';
 import 'chart_coordinate_converter.dart';
 
@@ -64,6 +66,10 @@ class CandlestickChart extends StatefulWidget {
   final void Function(ChartPoint)? onDrawingStart;
   final void Function(ChartPoint)? onDrawingUpdate;
   final void Function(ChartPoint?)? onDrawingComplete;
+  final void Function(String)? onDrawingSelected;
+  
+  // Position tool support
+  final void Function(ChartPoint point, bool isLong)? onPositionToolStart;
 
   const CandlestickChart({
     super.key,
@@ -82,6 +88,8 @@ class CandlestickChart extends StatefulWidget {
     this.onDrawingStart,
     this.onDrawingUpdate,
     this.onDrawingComplete,
+    this.onDrawingSelected,
+    this.onPositionToolStart,
   });
 
   @override
@@ -115,6 +123,27 @@ class _CandlestickChartState extends State<CandlestickChart>
   int? _selectedDrawingIndex; // Which drawing is selected
   int? _selectedAnchorIndex; // Which anchor is being dragged (-1 = body)
   ChartPoint? _dragStartDataPoint; // Data point where drag started
+  
+  // Position tool dragging state
+  PositionToolHandle? _activePositionHandle;
+  String? _draggingPositionToolId;
+  // Store SCREEN position at drag start (not chart coordinates!)
+  // This ensures we use the same converter for start and current positions
+  Offset? _positionToolDragStartScreen;
+  // Store original tool position at drag start for absolute positioning
+  double? _originalToolEntryPrice;
+  double? _originalToolStopLoss;
+  double? _originalToolTakeProfit;
+  DateTime? _originalToolStartTime;
+  DateTime? _originalToolEndTime;
+  // Throttle drag updates to reduce rebuilds
+  DateTime? _lastDragUpdateTime;
+  static const _dragThrottleMs = 16; // ~60fps max
+  
+  // Chart interaction mode
+  bool _isFreePanMode = true; // true = free pan, false = locked zoom
+  double _priceOffset = 0.0; // Vertical pan offset in price units
+  double? _panStartPriceOffset;
 
   // Animation
   late AnimationController _animController;
@@ -176,6 +205,7 @@ class _CandlestickChartState extends State<CandlestickChart>
           chartWidth: chartWidth,
           chartHeight: chartHeight,
           priceAxisWidth: _priceAxisWidth,
+          priceOffset: _priceOffset,
         );
 
         return Listener(
@@ -312,6 +342,44 @@ class _CandlestickChartState extends State<CandlestickChart>
                                     ),
                                   ),
                                 ),
+                              
+                              // Pan mode toggle + Reset button
+                              Positioned(
+                                top: 8,
+                                right: 70, // Leave room for price axis
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    // Reset view button
+                                    if (_priceOffset != 0.0)
+                                      _buildChartControlButton(
+                                        icon: Icons.center_focus_strong,
+                                        tooltip: 'Reset View',
+                                        isActive: false,
+                                        onTap: () => setState(() {
+                                          _priceOffset = 0.0;
+                                        }),
+                                      ),
+                                    const SizedBox(width: 4),
+                                    // Pan mode toggle
+                                    _buildChartControlButton(
+                                      icon: _isFreePanMode 
+                                          ? Icons.open_with 
+                                          : Icons.zoom_out_map,
+                                      tooltip: _isFreePanMode 
+                                          ? 'Free Pan (click to lock)' 
+                                          : 'Locked (click for free pan)',
+                                      isActive: _isFreePanMode,
+                                      onTap: () => setState(() {
+                                        _isFreePanMode = !_isFreePanMode;
+                                        if (!_isFreePanMode) {
+                                          _priceOffset = 0.0; // Reset on lock
+                                        }
+                                      }),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -408,12 +476,51 @@ class _CandlestickChartState extends State<CandlestickChart>
 
     // Use the converter's built-in debug info
     _debugText = _converter!.debugInfo(_lastPointerPosition);
+    
+    // Add pan mode info
+    _debugText += 'PanMode: ${_isFreePanMode ? "FREE" : "LOCKED"}\n';
+    _debugText += 'PriceOffset: ${_priceOffset.toStringAsFixed(2)}\n';
 
     // Add panning state
     if (_isPanning) {
       _debugText += 'State: PANNING\n';
+    } else if (_draggingPositionToolId != null && _activePositionHandle != null) {
+      _debugText += 'State: DRAGGING ${_activePositionHandle!.name}\n';
     } else if (_selectedDrawingIndex != null) {
       _debugText += 'State: EDITING #$_selectedDrawingIndex\n';
+    }
+    
+    // Add position tool hit test info if hovering
+    if (_lastPointerPosition != null) {
+      for (final drawing in widget.drawings) {
+        if (drawing is PositionToolDrawing) {
+          final handle = _converter!.hitTestPositionTool(_lastPointerPosition!, drawing);
+          if (handle != null) {
+            _debugText += 'PosToolHit: ${handle.name}\n';
+            
+            // Show handle distances for debugging hitboxes
+            final entryY = _converter!.priceToScreenY(drawing.entryPrice);
+            final slY = _converter!.priceToScreenY(drawing.stopLossPrice);
+            final tpY = _converter!.priceToScreenY(drawing.takeProfitPrice);
+            _debugText += 'EntryY: ${entryY.toStringAsFixed(1)}, SLY: ${slY.toStringAsFixed(1)}, TPY: ${tpY.toStringAsFixed(1)}\n';
+            break;
+          }
+        }
+      }
+    }
+    
+    // Show visible time range
+    if (widget.candles.isNotEmpty) {
+      final (startIdx, endIdx) = _converter!.visibleCandleRange;
+      final firstVisible = startIdx >= 0 && startIdx < widget.candles.length 
+          ? widget.candles[widget.candles.length - 1 - startIdx].timestamp 
+          : null;
+      final lastVisible = endIdx > 0 && (widget.candles.length - endIdx) >= 0 
+          ? widget.candles[widget.candles.length - endIdx].timestamp 
+          : null;
+      if (firstVisible != null && lastVisible != null) {
+        _debugText += 'VisTime: ${DateFormat('MM/dd HH:mm').format(lastVisible)} - ${DateFormat('MM/dd HH:mm').format(firstVisible)}\n';
+      }
     }
   }
 
@@ -426,6 +533,8 @@ class _CandlestickChartState extends State<CandlestickChart>
       DrawingToolType.ray => 'Ray',
       DrawingToolType.fibonacciRetracement => 'Fibonacci',
       DrawingToolType.rectangle => 'Rectangle',
+      DrawingToolType.longPosition => 'Long Position',
+      DrawingToolType.shortPosition => 'Short Position',
     };
   }
 
@@ -440,6 +549,18 @@ class _CandlestickChartState extends State<CandlestickChart>
       final point = _converter!.screenToChartPoint(position);
       if (point != null) {
         widget.onDrawingStart?.call(point);
+      }
+    }
+    
+    // For position tools (Long/Short)
+    if (widget.currentTool == DrawingToolType.longPosition ||
+        widget.currentTool == DrawingToolType.shortPosition) {
+      final point = _converter!.screenToChartPoint(position);
+      if (point != null) {
+        widget.onPositionToolStart?.call(
+          point, 
+          widget.currentTool == DrawingToolType.longPosition,
+        );
       }
     }
   }
@@ -567,6 +688,41 @@ class _CandlestickChartState extends State<CandlestickChart>
     if (volume >= 1e3) return '${(volume / 1e3).toStringAsFixed(1)}K';
     return volume.toStringAsFixed(0);
   }
+  
+  Widget _buildChartControlButton({
+    required IconData icon,
+    required String tooltip,
+    required bool isActive,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: isActive 
+                ? AppColors.accent.withValues(alpha: 0.9)
+                : AppColors.surface.withValues(alpha: 0.8),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(
+              color: isActive 
+                  ? AppColors.accent 
+                  : AppColors.border.withValues(alpha: 0.5),
+              width: 1,
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: 16,
+            color: isActive ? Colors.black : AppColors.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
 
   // ==================== GESTURE HANDLERS ====================
 
@@ -605,6 +761,30 @@ class _CandlestickChartState extends State<CandlestickChart>
       for (int i = widget.drawings.length - 1; i >= 0; i--) {
         final drawing = widget.drawings[i];
 
+        // Special handling for position tools - use screen-space hit testing
+        if (drawing is PositionToolDrawing) {
+          final handle = _converter!.hitTestPositionTool(localPosition, drawing);
+          if (handle != null) {
+            setState(() {
+              _draggingPositionToolId = drawing.id;
+              _activePositionHandle = handle;
+              // Store SCREEN position at drag start (not chart coordinates!)
+              _positionToolDragStartScreen = localPosition;
+              // Store original tool position for absolute positioning during drag
+              _originalToolEntryPrice = drawing.entryPrice;
+              _originalToolStopLoss = drawing.stopLossPrice;
+              _originalToolTakeProfit = drawing.takeProfitPrice;
+              _originalToolStartTime = drawing.entryPoint.timestamp;
+              _originalToolEndTime = drawing.endTime;
+              _isPanning = false;
+            });
+            
+            // Select this drawing
+            widget.onDrawingSelected?.call(drawing.id);
+            return;
+          }
+        }
+
         // Check anchors first (for resize)
         final anchorIndex = _converter!.hitTestAnchors(localPosition, drawing);
         if (anchorIndex >= 0) {
@@ -640,9 +820,12 @@ class _CandlestickChartState extends State<CandlestickChart>
     setState(() {
       _isPanning = true;
       _panStartOffset = _scrollOffset;
+      _panStartPriceOffset = _priceOffset;
       _scaleStartFocalPoint = localPosition;
       _selectedDrawingIndex = null;
       _selectedAnchorIndex = null;
+      _draggingPositionToolId = null;
+      _activePositionHandle = null;
     });
   }
 
@@ -653,6 +836,12 @@ class _CandlestickChartState extends State<CandlestickChart>
     bool isDrawingMode,
   ) {
     if (_converter == null) return;
+
+    // If dragging a position tool handle
+    if (_draggingPositionToolId != null && _activePositionHandle != null) {
+      _handlePositionToolDrag(localPosition);
+      return;
+    }
 
     // If editing a drawing anchor (resize)
     if (_selectedDrawingIndex != null &&
@@ -681,22 +870,128 @@ class _CandlestickChartState extends State<CandlestickChart>
       setState(() {
         // Calculate delta from start position
         final dx = _scaleStartFocalPoint!.dx - localPosition.dx;
+        final dy = _scaleStartFocalPoint!.dy - localPosition.dy;
         final totalWidth =
             widget.candles.length * (_candleWidth * (1 + _candleGap));
 
         // ALWAYS allow panning, even if all candles fit on screen
-        // Min scroll: negative value to allow panning left (show future space)
-        // Max scroll: positive value to pan right (show older candles)
-        final minScroll = -_chartWidth * 0.5; // Allow 50% future space
+        // Min scroll: negative value to allow panning right (show future space)
+        // Max scroll: positive value to pan left (show older candles)
+        final minScroll = -_chartWidth * 0.7; // Allow 70% future space for position tools
         final maxScroll = math.max(
           totalWidth * 0.5,
           totalWidth - _chartWidth + _chartWidth * 0.5,
         );
 
         _scrollOffset = (_panStartOffset! + dx).clamp(minScroll, maxScroll);
+        
+        // Vertical panning in free pan mode
+        if (_isFreePanMode && _panStartPriceOffset != null) {
+          // Convert pixel delta to price delta
+          // IMPORTANT: Dragging UP (dy negative when start > current) should move chart UP
+          // which means we see HIGHER prices, so priceOffset should DECREASE
+          final priceRange = _converter!.maxPrice - _converter!.minPrice;
+          final priceDelta = -(dy / _chartHeight) * priceRange; // Negated!
+          _priceOffset = _panStartPriceOffset! + priceDelta;
+        }
+        
         _updateDebugText();
       });
     }
+  }
+  
+  /// Handle position tool handle dragging
+  /// 
+  /// KEY FIX: Convert BOTH start and current positions using the SAME converter
+  /// This eliminates drift caused by converter changes during drag
+  void _handlePositionToolDrag(Offset localPosition) {
+    if (_draggingPositionToolId == null || _activePositionHandle == null) return;
+    if (_converter == null || _positionToolDragStartScreen == null) return;
+    
+    // Throttle updates to reduce glitchiness (limit to ~60fps)
+    final now = DateTime.now();
+    if (_lastDragUpdateTime != null) {
+      final elapsed = now.difference(_lastDragUpdateTime!).inMilliseconds;
+      if (elapsed < _dragThrottleMs) return;
+    }
+    _lastDragUpdateTime = now;
+    
+    // Convert BOTH positions using the CURRENT converter
+    // This is crucial - both conversions use the same converter state
+    final startChartPoint = _converter!.screenToChartPoint(_positionToolDragStartScreen!);
+    final currentChartPoint = _converter!.screenToChartPoint(localPosition);
+    
+    if (startChartPoint == null || currentChartPoint == null) return;
+    
+    // Calculate delta in chart space (using same converter for both)
+    final priceDelta = currentChartPoint.price - startChartPoint.price;
+    final timeDelta = currentChartPoint.timestamp.difference(startChartPoint.timestamp);
+    
+    final drawingProvider = context.read<ChartDrawingProvider>();
+    final toolId = _draggingPositionToolId!;
+    final handle = _activePositionHandle!;
+    
+    // Check if we have original tool data
+    if (_originalToolEntryPrice == null || _originalToolStartTime == null) return;
+    
+    switch (handle) {
+      case PositionToolHandle.stopLossLine:
+      case PositionToolHandle.stopLossLeft:
+      case PositionToolHandle.stopLossRight:
+        // SL only moves vertically
+        final newSL = _originalToolStopLoss! + priceDelta;
+        drawingProvider.updatePositionToolStopLoss(toolId, newSL);
+        break;
+        
+      case PositionToolHandle.takeProfitLine:
+      case PositionToolHandle.takeProfitLeft:
+      case PositionToolHandle.takeProfitRight:
+        // TP only moves vertically
+        final newTP = _originalToolTakeProfit! + priceDelta;
+        drawingProvider.updatePositionToolTakeProfit(toolId, newTP);
+        break;
+        
+      case PositionToolHandle.entryLine:
+        // Move entire tool up/down (vertical only)
+        drawingProvider.setPositionToolAbsolute(
+          toolId,
+          _originalToolEntryPrice! + priceDelta,
+          _originalToolStopLoss! + priceDelta,
+          _originalToolTakeProfit! + priceDelta,
+          _originalToolStartTime!,
+          _originalToolEndTime!,
+        );
+        break;
+        
+      case PositionToolHandle.entryLeft:
+      case PositionToolHandle.entryRight:
+        // Only update entry price
+        final newEntry = _originalToolEntryPrice! + priceDelta;
+        drawingProvider.updatePositionToolEntry(toolId, newEntry);
+        break;
+        
+      case PositionToolHandle.rightEdge:
+        // Update end time only
+        final newEndTime = _originalToolEndTime!.add(timeDelta);
+        if (newEndTime.isAfter(_originalToolStartTime!)) {
+          drawingProvider.updatePositionToolEndTime(toolId, newEndTime);
+        }
+        break;
+        
+      case PositionToolHandle.body:
+        // Move entire tool (both price and time)
+        drawingProvider.setPositionToolAbsolute(
+          toolId, 
+          _originalToolEntryPrice! + priceDelta, 
+          _originalToolStopLoss! + priceDelta, 
+          _originalToolTakeProfit! + priceDelta, 
+          _originalToolStartTime!.add(timeDelta), 
+          _originalToolEndTime!.add(timeDelta),
+        );
+        break;
+    }
+    
+    // Don't call setState here - the provider notification handles the rebuild
   }
 
   /// Handle pan/drag end
@@ -708,9 +1003,21 @@ class _CandlestickChartState extends State<CandlestickChart>
     setState(() {
       _isPanning = false;
       _panStartOffset = null;
+      _panStartPriceOffset = null;
       _scaleStartFocalPoint = null;
       _selectedAnchorIndex = null;
       // Keep _selectedDrawingIndex to show selection
+      
+      // Clear position tool drag state
+      _activePositionHandle = null;
+      _positionToolDragStartScreen = null;
+      _originalToolEntryPrice = null;
+      _originalToolStopLoss = null;
+      _originalToolTakeProfit = null;
+      _originalToolStartTime = null;
+      _originalToolEndTime = null;
+      _lastDragUpdateTime = null;
+      // Keep _draggingPositionToolId to maintain selection
     });
   }
 
@@ -1180,9 +1487,273 @@ class _CandlestickPainter extends CustomPainter {
         // TODO: Implement vertical line
         break;
 
+      case DrawingToolType.longPosition:
+      case DrawingToolType.shortPosition:
+        final positionTool = drawing as PositionToolDrawing;
+        _drawPositionTool(canvas, conv, positionTool);
+        break;
+
       case DrawingToolType.none:
         break;
     }
+  }
+  
+  /// Draw TradingView-style position tool (Long/Short with SL/TP zones)
+  void _drawPositionTool(
+    Canvas canvas,
+    ChartCoordinateConverter conv,
+    PositionToolDrawing tool,
+  ) {
+    final entryY = conv.priceToY(tool.entryPrice);
+    final slY = conv.priceToY(tool.stopLossPrice);
+    final tpY = conv.priceToY(tool.takeProfitPrice);
+    
+    // Get X positions from data space (entry time and end time)
+    final startScreenPos = conv.chartPointToScreen(tool.entryPoint);
+    final endScreenPos = conv.chartPointToScreen(
+      ChartPoint(timestamp: tool.endTime, price: tool.entryPrice),
+    );
+    
+    final zoneLeft = startScreenPos.dx;
+    var zoneRight = endScreenPos.dx;
+    
+    // ENFORCE MINIMUM WIDTH: At least 80 pixels wide for usability
+    const minPixelWidth = 80.0;
+    if ((zoneRight - zoneLeft).abs() < minPixelWidth) {
+      // If tool is too narrow, extend it to the right
+      zoneRight = zoneLeft + minPixelWidth;
+    }
+    
+    // Skip ONLY if tool is completely off-screen on the LEFT side
+    // NEVER skip if tool is on the right (present/future) - we want to see it!
+    final isCompletelyOffLeft = zoneRight < -50;
+    if (isCompletelyOffLeft) return;
+    
+    // Don't cull on the right - let tools exist in "future" space
+    
+    // Clamp to visible area for drawing (tool can extend beyond chart bounds)
+    // Use wider bounds to allow tools near the edge to remain visible
+    final clampedLeft = zoneLeft.clamp(-100.0, conv.chartWidth + 100);
+    final clampedRight = zoneRight.clamp(-100.0, conv.chartWidth + 100);
+    
+    // Colors based on long/short and status
+    final profitColor = tool.isLong ? AppColors.profit : AppColors.loss;
+    final lossColor = tool.isLong ? AppColors.loss : AppColors.profit;
+    final opacity = tool.status == PositionToolStatus.closed ? 0.3 : 1.0;
+    
+    // Draw profit zone (green for long, red for short)
+    final profitZoneRect = Rect.fromLTRB(
+      clampedLeft,
+      tool.isLong ? tpY : entryY,
+      clampedRight,
+      tool.isLong ? entryY : tpY,
+    );
+    
+    final profitFillPaint = Paint()
+      ..color = profitColor.withValues(alpha: 0.2 * opacity)
+      ..style = PaintingStyle.fill;
+    
+    canvas.drawRect(profitZoneRect, profitFillPaint);
+    
+    // Draw loss zone (red for long, green for short)
+    final lossZoneRect = Rect.fromLTRB(
+      clampedLeft,
+      tool.isLong ? entryY : slY,
+      clampedRight,
+      tool.isLong ? slY : entryY,
+    );
+    
+    final lossFillPaint = Paint()
+      ..color = lossColor.withValues(alpha: 0.2 * opacity)
+      ..style = PaintingStyle.fill;
+    
+    canvas.drawRect(lossZoneRect, lossFillPaint);
+    
+    // Draw border around the entire box
+    final borderPaint = Paint()
+      ..color = AppColors.textSecondary.withValues(alpha: 0.3 * opacity)
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+    
+    final fullRect = Rect.fromLTRB(
+      clampedLeft,
+      math.min(tpY, slY),
+      clampedRight,
+      math.max(tpY, slY),
+    );
+    canvas.drawRect(fullRect, borderPaint);
+    
+    // Draw entry line (solid, prominent)
+    final entryPaint = Paint()
+      ..color = AppColors.accent.withValues(alpha: opacity)
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+    
+    canvas.drawLine(
+      Offset(clampedLeft, entryY),
+      Offset(clampedRight, entryY),
+      entryPaint,
+    );
+    
+    // Draw take profit line (dashed)
+    final tpPaint = Paint()
+      ..color = profitColor.withValues(alpha: opacity)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+    
+    _drawDashedLine(canvas, Offset(clampedLeft, tpY), Offset(clampedRight, tpY), tpPaint);
+    
+    // Draw stop loss line (dashed)
+    final slPaint = Paint()
+      ..color = lossColor.withValues(alpha: opacity)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+    
+    _drawDashedLine(canvas, Offset(clampedLeft, slY), Offset(clampedRight, slY), slPaint);
+    
+    // Draw labels (inside the box, near left edge)
+    final labelX = clampedLeft + 8;
+    
+    // Side indicator + Entry
+    final sideText = tool.isLong ? 'LONG' : 'SHORT';
+    final sideColor = tool.isLong ? AppColors.profit : AppColors.loss;
+    _drawPositionLabel(canvas, '$sideText @ \$${tool.entryPrice.toStringAsFixed(2)}', 
+        Offset(labelX, entryY - 16), sideColor.withValues(alpha: opacity));
+    
+    // TP label
+    _drawPositionLabel(canvas, 'TP \$${tool.takeProfitPrice.toStringAsFixed(2)}', 
+        Offset(labelX, tool.isLong ? tpY + 4 : tpY - 14), profitColor.withValues(alpha: opacity));
+    
+    // SL label
+    _drawPositionLabel(canvas, 'SL \$${tool.stopLossPrice.toStringAsFixed(2)}', 
+        Offset(labelX, tool.isLong ? slY - 14 : slY + 4), lossColor.withValues(alpha: opacity));
+    
+    // R:R ratio at the right edge
+    final rrText = '1:${tool.riskRewardRatio.toStringAsFixed(1)}';
+    _drawPositionLabel(canvas, rrText, Offset(clampedRight - 35, entryY - 16), 
+        AppColors.textSecondary.withValues(alpha: opacity));
+    
+    // Draw handles if selected
+    if (tool.isSelected) {
+      // Entry handles (left and right)
+      _drawPositionHandle(canvas, Offset(zoneLeft, entryY), AppColors.accent);
+      _drawPositionHandle(canvas, Offset(zoneRight, entryY), AppColors.accent);
+      
+      // TP handles
+      _drawPositionHandle(canvas, Offset(zoneLeft, tpY), profitColor);
+      _drawPositionHandle(canvas, Offset(zoneRight, tpY), profitColor);
+      
+      // SL handles
+      _drawPositionHandle(canvas, Offset(zoneLeft, slY), lossColor);
+      _drawPositionHandle(canvas, Offset(zoneRight, slY), lossColor);
+      
+      // Right edge resize handle (middle)
+      final middleY = (math.min(tpY, slY) + math.max(tpY, slY)) / 2;
+      _drawPositionHandle(canvas, Offset(zoneRight, middleY), AppColors.textSecondary);
+    }
+    
+    // Show status badge
+    if (tool.status == PositionToolStatus.active) {
+      _drawStatusBadge(canvas, 'ACTIVE', Offset(clampedRight - 55, entryY + 4), AppColors.accent);
+    } else if (tool.status == PositionToolStatus.closed) {
+      final pnlColor = (tool.realizedPnL ?? 0) >= 0 ? AppColors.profit : AppColors.loss;
+      final pnlSign = (tool.realizedPnL ?? 0) >= 0 ? '+' : '';
+      final pnlText = '$pnlSign\$${(tool.realizedPnL ?? 0).toStringAsFixed(2)}';
+      _drawStatusBadge(canvas, pnlText, Offset(clampedRight - 65, entryY + 4), pnlColor);
+    }
+  }
+  
+  void _drawDashedLine(Canvas canvas, Offset start, Offset end, Paint paint) {
+    const dashWidth = 8.0;
+    const dashSpace = 4.0;
+    
+    final dx = end.dx - start.dx;
+    final dy = end.dy - start.dy;
+    final distance = math.sqrt(dx * dx + dy * dy);
+    
+    final dashCount = (distance / (dashWidth + dashSpace)).floor();
+    final unitX = dx / distance;
+    final unitY = dy / distance;
+    
+    for (int i = 0; i < dashCount; i++) {
+      final startOffset = Offset(
+        start.dx + (dashWidth + dashSpace) * i * unitX,
+        start.dy + (dashWidth + dashSpace) * i * unitY,
+      );
+      final endOffset = Offset(
+        startOffset.dx + dashWidth * unitX,
+        startOffset.dy + dashWidth * unitY,
+      );
+      canvas.drawLine(startOffset, endOffset, paint);
+    }
+  }
+  
+  void _drawPositionLabel(Canvas canvas, String text, Offset position, Color color) {
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      textDirection: ui.TextDirection.ltr,
+    )..layout();
+    
+    textPainter.paint(canvas, position);
+  }
+  
+  void _drawPositionHandle(Canvas canvas, Offset center, Color color) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    
+    canvas.drawCircle(center, 6, paint);
+    
+    final borderPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    
+    canvas.drawCircle(center, 6, borderPaint);
+  }
+  
+  void _drawStatusBadge(Canvas canvas, String text, Offset position, Color color) {
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 9,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.5,
+        ),
+      ),
+      textDirection: ui.TextDirection.ltr,
+    )..layout();
+    
+    final padding = const EdgeInsets.symmetric(horizontal: 6, vertical: 2);
+    final bgRect = Rect.fromLTWH(
+      position.dx,
+      position.dy,
+      textPainter.width + padding.horizontal,
+      textPainter.height + padding.vertical,
+    );
+    
+    final bgPaint = Paint()
+      ..color = color.withValues(alpha: 0.9)
+      ..style = PaintingStyle.fill;
+    
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(bgRect, const Radius.circular(4)),
+      bgPaint,
+    );
+    
+    textPainter.paint(canvas, Offset(
+      position.dx + padding.left,
+      position.dy + padding.top,
+    ));
   }
 
   void _drawAnchor(Canvas canvas, Offset point, Color color) {

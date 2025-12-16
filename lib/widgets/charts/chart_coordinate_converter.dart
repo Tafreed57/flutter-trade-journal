@@ -26,6 +26,7 @@ class ChartCoordinateConverter {
   final double chartWidth;      // Excludes price axis
   final double chartHeight;
   final double priceAxisWidth;
+  final double priceOffset;     // Vertical pan offset in price units
   
   // Calculated values
   late final double minPrice;
@@ -40,6 +41,7 @@ class ChartCoordinateConverter {
     required this.chartWidth,
     required this.chartHeight,
     this.priceAxisWidth = 60.0,
+    this.priceOffset = 0.0,
   }) {
     candleStep = candleWidth * (1 + candleGap);
     _calculateVisiblePriceRange();
@@ -48,8 +50,8 @@ class ChartCoordinateConverter {
   /// Calculate the price range for visible candles
   void _calculateVisiblePriceRange() {
     if (candles.isEmpty) {
-      minPrice = 0;
-      maxPrice = 100;
+      minPrice = 0 + priceOffset;
+      maxPrice = 100 + priceOffset;
       return;
     }
     
@@ -68,13 +70,14 @@ class ChartCoordinateConverter {
     }
     
     if (min.isInfinite || max.isInfinite) {
-      minPrice = candles.first.low;
-      maxPrice = candles.first.high;
+      minPrice = candles.first.low + priceOffset;
+      maxPrice = candles.first.high + priceOffset;
     } else {
       final range = max - min;
       final padding = range * 0.08;
-      minPrice = min - padding;
-      maxPrice = max + padding;
+      // Apply price offset for vertical panning
+      minPrice = min - padding + priceOffset;
+      maxPrice = max + padding + priceOffset;
     }
   }
   
@@ -136,33 +139,44 @@ class ChartCoordinateConverter {
   // ==========================================================================
   
   /// Convert screen position to chart point (price + time)
+  /// 
+  /// Supports positions beyond the chart bounds for "future space" placement
   ChartPoint? screenToChartPoint(Offset screenPosition) {
-    final clampedX = screenPosition.dx.clamp(0.0, chartWidth);
+    if (candles.isEmpty) return null;
+    
+    // Allow X beyond bounds for future space (don't clamp X)
+    // Only clamp Y since price must be valid
     final clampedY = screenPosition.dy.clamp(0.0, chartHeight);
     
     // Convert Y to price
     final price = screenYToPrice(clampedY);
     
     // Convert X to candleIndex, then to timestamp
-    final candleIndexFrac = screenXToCandleIndex(clampedX);
-    final candleIndex = candleIndexFrac.round();
+    // DON'T clamp X - allow future space placement
+    final candleIndexFrac = screenXToCandleIndex(screenPosition.dx);
     
     // candleIndex 0 = newest candle = candles[candles.length - 1]
-    final actualArrayIndex = candles.length - 1 - candleIndex;
+    // Negative candleIndex = future (right of newest candle)
+    // candleIndex >= candles.length = past (left of oldest candle)
     
+    final avgDuration = _getAverageCandleDuration();
     DateTime timestamp;
-    if (actualArrayIndex >= 0 && actualArrayIndex < candles.length) {
-      timestamp = candles[actualArrayIndex].timestamp;
-    } else if (actualArrayIndex >= candles.length) {
-      // Past the oldest candle (left side)
-      final extraCandles = actualArrayIndex - candles.length + 1;
-      final avgDuration = _getAverageCandleDuration();
-      timestamp = candles.first.timestamp.subtract(Duration(minutes: avgDuration * extraCandles));
+    
+    // FIX: Check for NEGATIVE candleIndex FIRST (future space)
+    if (candleIndexFrac < 0) {
+      // Into the future (right of newest candle)
+      // candleIndexFrac = -2.5 means 2.5 candles into the future
+      final extraCandles = -candleIndexFrac;
+      timestamp = candles.last.timestamp.add(Duration(minutes: (avgDuration * extraCandles).round()));
+    } else if (candleIndexFrac >= candles.length) {
+      // Past the oldest candle (left side, scrolled way back)
+      final extraCandles = candleIndexFrac - candles.length + 1;
+      timestamp = candles.first.timestamp.subtract(Duration(minutes: (avgDuration * extraCandles).round()));
     } else {
-      // Into the future (right side)
-      final extraCandles = -actualArrayIndex;
-      final avgDuration = _getAverageCandleDuration();
-      timestamp = candles.last.timestamp.add(Duration(minutes: avgDuration * extraCandles));
+      // Within candle data range - snap to nearest candle
+      final candleIndex = candleIndexFrac.round().clamp(0, candles.length - 1);
+      final actualArrayIndex = candles.length - 1 - candleIndex;
+      timestamp = candles[actualArrayIndex].timestamp;
     }
     
     return ChartPoint(timestamp: timestamp, price: price);
@@ -180,8 +194,26 @@ class ChartCoordinateConverter {
   }
   
   /// Get candle index from timestamp
+  /// 
+  /// Returns:
+  /// - Positive index: candle exists in data (0 = newest, increasing = older)
+  /// - Negative index: timestamp is in the future (beyond newest candle)
+  /// - Index > candles.length: timestamp is before oldest candle
   double _timestampToCandleIndex(DateTime timestamp) {
     if (candles.isEmpty) return 0;
+    
+    final newestCandle = candles.last;
+    final avgDuration = _getAverageCandleDuration();
+    
+    // Check if timestamp is in the future (after newest candle)
+    if (timestamp.isAfter(newestCandle.timestamp)) {
+      if (avgDuration > 0) {
+        final minutesAfter = timestamp.difference(newestCandle.timestamp).inMinutes;
+        // Return negative index for future timestamps
+        return -(minutesAfter / avgDuration);
+      }
+      return 0; // At the newest candle
+    }
     
     // Find the candle with this timestamp or closest one
     for (int i = candles.length - 1; i >= 0; i--) {
@@ -192,7 +224,6 @@ class ChartCoordinateConverter {
     }
     
     // Timestamp is before all candles
-    final avgDuration = _getAverageCandleDuration();
     if (avgDuration > 0) {
       final minutesBefore = candles.first.timestamp.difference(timestamp).inMinutes;
       return candles.length - 1 + (minutesBefore / avgDuration);
@@ -212,11 +243,12 @@ class ChartCoordinateConverter {
   /// Get the total scrollable width in pixels
   double get totalScrollableWidth => candles.length * candleStep;
   
-  /// Get the maximum scroll offset (allows panning past the data)
+  /// Get the maximum scroll offset (allows panning to see older candles)
   double get maxScrollOffset => math.max(totalScrollableWidth * 0.5, totalScrollableWidth - chartWidth + chartWidth * 0.5);
   
-  /// Get the minimum scroll offset (negative to allow panning to "future")
-  double get minScrollOffset => -chartWidth * 0.5;
+  /// Get the minimum scroll offset (negative to allow "future space" on the right)
+  /// Allows panning to show space for drawing tools beyond the current candle
+  double get minScrollOffset => -chartWidth * 0.7;  // 70% future space
   
   /// Get visible candle index range
   (int startIndex, int endIndex) get visibleCandleRange {
@@ -231,8 +263,9 @@ class ChartCoordinateConverter {
   // ==========================================================================
   
   /// Hit test tolerance in pixels
-  static const double handleHitRadius = 12.0;
-  static const double lineHitDistance = 8.0;
+  static const double handleHitRadius = 16.0;  // Generous radius for handles
+  static const double lineHitDistance = 12.0;  // Tolerance for line detection
+  static const double bodyInflation = 6.0;     // Extra pixels around body
   
   /// Check if a screen point is near a drawing anchor
   bool isNearAnchor(Offset screenPoint, ChartPoint anchor) {
@@ -289,6 +322,93 @@ class ChartCoordinateConverter {
     }
   }
   
+  /// Hit test for position tool with proper priority and screen-space tolerances
+  /// Returns the handle hit, or null if nothing was hit
+  /// Priority: corner handles > edge handles > lines > body
+  PositionToolHandle? hitTestPositionTool(Offset screenPoint, PositionToolDrawing tool) {
+    // Convert tool anchors to screen space
+    final entryY = priceToScreenY(tool.entryPrice);
+    final slY = priceToScreenY(tool.stopLossPrice);
+    final tpY = priceToScreenY(tool.takeProfitPrice);
+    
+    final startScreenPos = chartPointToScreen(tool.entryPoint);
+    final endScreenPos = chartPointToScreen(
+      ChartPoint(timestamp: tool.endTime, price: tool.entryPrice),
+    );
+    
+    final leftX = startScreenPos.dx;
+    // Enforce minimum width for hit-testing (at least 80px)
+    var rightX = endScreenPos.dx;
+    const minHitWidth = 80.0;
+    if ((rightX - leftX).abs() < minHitWidth) {
+      rightX = leftX + minHitWidth;
+    }
+    
+    // Define handle positions
+    final handles = <PositionToolHandle, Offset>{
+      // Corner handles (highest priority)
+      PositionToolHandle.stopLossLeft: Offset(leftX, slY),
+      PositionToolHandle.stopLossRight: Offset(rightX, slY),
+      PositionToolHandle.takeProfitLeft: Offset(leftX, tpY),
+      PositionToolHandle.takeProfitRight: Offset(rightX, tpY),
+      PositionToolHandle.entryLeft: Offset(leftX, entryY),
+      PositionToolHandle.entryRight: Offset(rightX, entryY),
+      // Right edge handle (middle)
+      PositionToolHandle.rightEdge: Offset(rightX, (math.min(slY, tpY) + math.max(slY, tpY)) / 2),
+    };
+    
+    // Find closest handle within radius
+    PositionToolHandle? closestHandle;
+    double closestDistance = handleHitRadius;
+    
+    for (final entry in handles.entries) {
+      final distance = (screenPoint - entry.value).distance;
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestHandle = entry.key;
+      }
+    }
+    
+    if (closestHandle != null) {
+      return closestHandle;
+    }
+    
+    // Check for line hits (second priority)
+    // Entry line
+    if (_isNearHorizontalLineSegment(screenPoint, leftX, rightX, entryY, lineHitDistance)) {
+      return PositionToolHandle.entryLine;
+    }
+    
+    // SL line
+    if (_isNearHorizontalLineSegment(screenPoint, leftX, rightX, slY, lineHitDistance)) {
+      return PositionToolHandle.stopLossLine;
+    }
+    
+    // TP line
+    if (_isNearHorizontalLineSegment(screenPoint, leftX, rightX, tpY, lineHitDistance)) {
+      return PositionToolHandle.takeProfitLine;
+    }
+    
+    // Check for body hit (lowest priority)
+    final minY = math.min(slY, math.min(tpY, entryY)) - bodyInflation;
+    final maxY = math.max(slY, math.max(tpY, entryY)) + bodyInflation;
+    final bodyRect = Rect.fromLTRB(leftX - bodyInflation, minY, rightX + bodyInflation, maxY);
+    
+    if (bodyRect.contains(screenPoint)) {
+      return PositionToolHandle.body;
+    }
+    
+    return null;
+  }
+  
+  /// Check if a point is near a horizontal line segment
+  bool _isNearHorizontalLineSegment(Offset point, double x1, double x2, double y, double tolerance) {
+    final minX = math.min(x1, x2) - tolerance;
+    final maxX = math.max(x1, x2) + tolerance;
+    
+    return point.dx >= minX && point.dx <= maxX && (point.dy - y).abs() <= tolerance;
+  }
+  
   double _distanceToLineSegment(Offset point, Offset lineStart, Offset lineEnd) {
     final l2 = (lineEnd - lineStart).distanceSquared;
     if (l2 == 0) return (point - lineStart).distance;
@@ -302,6 +422,31 @@ class ChartCoordinateConverter {
       lineStart.dy + t * (lineEnd.dy - lineStart.dy),
     );
     return (point - projection).distance;
+  }
+  
+  /// Get debug info about position tool handles for a given screen point
+  String debugPositionToolHitTest(Offset screenPoint, PositionToolDrawing tool) {
+    final entryY = priceToScreenY(tool.entryPrice);
+    final slY = priceToScreenY(tool.stopLossPrice);
+    final tpY = priceToScreenY(tool.takeProfitPrice);
+    
+    final startScreenPos = chartPointToScreen(tool.entryPoint);
+    final endScreenPos = chartPointToScreen(
+      ChartPoint(timestamp: tool.endTime, price: tool.entryPrice),
+    );
+    
+    final handle = hitTestPositionTool(screenPoint, tool);
+    
+    return '''
+Position Tool Hit Test:
+  Cursor: (${screenPoint.dx.toStringAsFixed(1)}, ${screenPoint.dy.toStringAsFixed(1)})
+  Entry line Y: ${entryY.toStringAsFixed(1)}
+  SL line Y: ${slY.toStringAsFixed(1)}
+  TP line Y: ${tpY.toStringAsFixed(1)}
+  Left X: ${startScreenPos.dx.toStringAsFixed(1)}
+  Right X: ${endScreenPos.dx.toStringAsFixed(1)}
+  Hit: ${handle?.name ?? 'none'}
+''';
   }
   
   // ==========================================================================

@@ -258,4 +258,63 @@ class PaperTradingProvider extends ChangeNotifier {
     _error = null;
     notifyListeners();
   }
+  
+  // ==================== POSITION TOOL INTEGRATION ====================
+  
+  /// Create a position from a position tool
+  /// Returns the position ID if successful
+  String? openPositionFromTool({
+    required String symbol,
+    required bool isLong,
+    required double entryPrice,
+    required double quantity,
+    required double stopLoss,
+    required double takeProfit,
+  }) {
+    try {
+      _error = null;
+      
+      _engine.placeMarketOrder(
+        symbol: symbol,
+        side: isLong ? OrderSide.buy : OrderSide.sell,
+        quantity: quantity,
+        currentPrice: entryPrice,
+        stopLoss: stopLoss,
+        takeProfit: takeProfit,
+      );
+      
+      _currentPrices[symbol] = entryPrice;
+      notifyListeners();
+      
+      // Return the newly created position ID
+      final position = _engine.getPositionForSymbol(symbol);
+      return position?.id;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return null;
+    }
+  }
+  
+  /// Get position by ID
+  PaperPosition? getPositionById(String positionId) {
+    try {
+      return openPositions.firstWhere((p) => p.id == positionId);
+    } catch (_) {
+      return null;
+    }
+  }
+  
+  /// Check if a position was closed (returns exit price and PnL if closed)
+  ({double exitPrice, double pnl})? getClosedPositionResult(String positionId) {
+    try {
+      final closed = closedPositions.firstWhere((p) => p.id == positionId);
+      return (
+        exitPrice: closed.exitPrice ?? 0,
+        pnl: closed.realizedPnL ?? 0,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }

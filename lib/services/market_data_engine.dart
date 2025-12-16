@@ -220,11 +220,11 @@ class MarketDataEngine {
     final data = _candleStore[storeKey];
     
     if (data == null) {
-      Log.d('No candles found for $symbol ${timeframe.label}');
+      // Only log once per missing key to avoid spam
       return [];
     }
     
-    Log.d('Returning ${data.candles.length} candles for $symbol ${timeframe.label}');
+    // Don't log on every access - this is called on every repaint
     return _applyReplayFilter(data.candles);
   }
   

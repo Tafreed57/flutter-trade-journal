@@ -730,6 +730,23 @@ class _ChartScreenState extends State<ChartScreen> {
             onDrawingStart: drawingProvider.startDrawing,
             onDrawingUpdate: drawingProvider.updateDrawing,
             onDrawingComplete: drawingProvider.completeDrawing,
+            onDrawingSelected: (id) {
+              drawingProvider.selectDrawing(id);
+            },
+            onPositionToolStart: (point, isLong) {
+              drawingProvider.startPositionTool(
+                symbol: provider.currentSymbol,
+                point: point,
+                isLong: isLong,
+              );
+              // Show the position tool sheet after creation
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                final posTools = drawingProvider.positionTools;
+                if (posTools.isNotEmpty) {
+                  _showPositionToolSheet(context, posTools.last);
+                }
+              });
+            },
           ),
         );
       },
@@ -784,6 +801,323 @@ class _ChartScreenState extends State<ChartScreen> {
       ),
       builder: (context) => _SymbolSearchSheet(provider: provider),
     );
+  }
+  
+  /// Show position tool management sheet
+  void _showPositionToolSheet(BuildContext context, PositionToolDrawing tool) {
+    final drawingProvider = Provider.of<ChartDrawingProvider>(context, listen: false);
+    final paperProvider = Provider.of<PaperTradingProvider>(context, listen: false);
+    
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          return Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom,
+              left: 20,
+              right: 20,
+              top: 20,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Handle bar
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.border,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                
+                // Header
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: (tool.isLong ? AppColors.profit : AppColors.loss)
+                            .withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(
+                        tool.isLong ? Icons.trending_up_rounded : Icons.trending_down_rounded,
+                        color: tool.isLong ? AppColors.profit : AppColors.loss,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${tool.isLong ? "LONG" : "SHORT"} ${tool.symbol}',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                          Text(
+                            _getStatusText(tool.status),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: _getStatusColor(tool.status),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close_rounded),
+                      color: AppColors.textTertiary,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                
+                // Position details
+                _PositionDetailRow(
+                  label: 'Entry',
+                  value: '\$${tool.entryPrice.toStringAsFixed(2)}',
+                  color: AppColors.accent,
+                ),
+                _PositionDetailRow(
+                  label: 'Stop Loss',
+                  value: '\$${tool.stopLossPrice.toStringAsFixed(2)}',
+                  subValue: '-\$${tool.riskPerShare.toStringAsFixed(2)}/share',
+                  color: AppColors.loss,
+                ),
+                _PositionDetailRow(
+                  label: 'Take Profit',
+                  value: '\$${tool.takeProfitPrice.toStringAsFixed(2)}',
+                  subValue: '+\$${tool.rewardPerShare.toStringAsFixed(2)}/share',
+                  color: AppColors.profit,
+                ),
+                const Divider(height: 24, color: AppColors.border),
+                
+                // Risk/Reward stats
+                Row(
+                  children: [
+                    Expanded(
+                      child: _StatCard(
+                        label: 'Risk:Reward',
+                        value: '1:${tool.riskRewardRatio.toStringAsFixed(1)}',
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _StatCard(
+                        label: 'Quantity',
+                        value: tool.quantity.toStringAsFixed(2),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _StatCard(
+                        label: 'Risk Amount',
+                        value: '\$${tool.totalRisk.toStringAsFixed(2)}',
+                        color: AppColors.loss,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                
+                // Actions based on status
+                if (tool.status == PositionToolStatus.draft) ...[
+                  // Activate button
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        // Create actual position
+                        final positionId = paperProvider.openPositionFromTool(
+                          symbol: tool.symbol,
+                          isLong: tool.isLong,
+                          entryPrice: tool.entryPrice,
+                          quantity: tool.quantity,
+                          stopLoss: tool.stopLossPrice,
+                          takeProfit: tool.takeProfitPrice,
+                        );
+                        
+                        if (positionId != null) {
+                          // Link position tool to actual position
+                          drawingProvider.activatePositionTool(tool.id, positionId);
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('${tool.isLong ? "Long" : "Short"} position opened!'),
+                              backgroundColor: tool.isLong ? AppColors.profit : AppColors.loss,
+                            ),
+                          );
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(paperProvider.error ?? 'Failed to open position'),
+                              backgroundColor: AppColors.loss,
+                            ),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.play_arrow_rounded),
+                      label: const Text('Activate Position'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: tool.isLong ? AppColors.profit : AppColors.loss,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                
+                if (tool.status == PositionToolStatus.active) ...[
+                  // Close button
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        if (tool.linkedPositionId != null) {
+                          final success = paperProvider.closePosition(tool.linkedPositionId!);
+                          if (success) {
+                            final result = paperProvider.getClosedPositionResult(tool.linkedPositionId!);
+                            if (result != null) {
+                              drawingProvider.closePositionTool(
+                                tool.id,
+                                result.exitPrice,
+                                result.pnl,
+                              );
+                            }
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Position closed: ${result != null ? (result.pnl >= 0 ? "+\$${result.pnl.toStringAsFixed(2)}" : "-\$${result.pnl.abs().toStringAsFixed(2)}") : ""}',
+                                ),
+                                backgroundColor: (result?.pnl ?? 0) >= 0 
+                                    ? AppColors.profit 
+                                    : AppColors.loss,
+                              ),
+                            );
+                          }
+                        }
+                      },
+                      icon: const Icon(Icons.close_rounded),
+                      label: const Text('Close Position'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.loss,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                
+                if (tool.status == PositionToolStatus.closed) ...[
+                  // P&L Summary
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: ((tool.realizedPnL ?? 0) >= 0 ? AppColors.profit : AppColors.loss)
+                          .withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: ((tool.realizedPnL ?? 0) >= 0 ? AppColors.profit : AppColors.loss)
+                            .withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        const Text(
+                          'POSITION CLOSED',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textTertiary,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '${(tool.realizedPnL ?? 0) >= 0 ? "+" : ""}\$${(tool.realizedPnL ?? 0).toStringAsFixed(2)}',
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
+                            color: (tool.realizedPnL ?? 0) >= 0 
+                                ? AppColors.profit 
+                                : AppColors.loss,
+                          ),
+                        ),
+                        Text(
+                          'Exit: \$${tool.exitPrice?.toStringAsFixed(2) ?? "N/A"}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                
+                // Delete button
+                TextButton.icon(
+                  onPressed: () {
+                    drawingProvider.deleteDrawing(tool.id);
+                    Navigator.pop(context);
+                  },
+                  icon: const Icon(Icons.delete_outline_rounded),
+                  label: const Text('Remove from Chart'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.loss,
+                  ),
+                ),
+                
+                const SizedBox(height: 16),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+  
+  String _getStatusText(PositionToolStatus status) {
+    return switch (status) {
+      PositionToolStatus.draft => 'Draft - Not active',
+      PositionToolStatus.active => 'Active - Live position',
+      PositionToolStatus.closed => 'Closed',
+    };
+  }
+  
+  Color _getStatusColor(PositionToolStatus status) {
+    return switch (status) {
+      PositionToolStatus.draft => AppColors.textTertiary,
+      PositionToolStatus.active => AppColors.accent,
+      PositionToolStatus.closed => AppColors.textSecondary,
+    };
   }
 }
 
@@ -1759,6 +2093,40 @@ class _DrawingToolbar extends StatelessWidget {
               ),
             ),
             
+            // Position tools separator
+            Container(
+              width: 1,
+              height: 20,
+              margin: const EdgeInsets.symmetric(horizontal: 8),
+              color: AppColors.border,
+            ),
+            
+            // Long Position tool
+            _DrawingToolButton(
+              icon: Icons.trending_up_rounded,
+              label: 'Long',
+              isSelected: provider.currentTool == DrawingToolType.longPosition,
+              color: AppColors.profit,
+              onTap: () => provider.setTool(
+                provider.currentTool == DrawingToolType.longPosition
+                    ? DrawingToolType.none
+                    : DrawingToolType.longPosition,
+              ),
+            ),
+            
+            // Short Position tool
+            _DrawingToolButton(
+              icon: Icons.trending_down_rounded,
+              label: 'Short',
+              isSelected: provider.currentTool == DrawingToolType.shortPosition,
+              color: AppColors.loss,
+              onTap: () => provider.setTool(
+                provider.currentTool == DrawingToolType.shortPosition
+                    ? DrawingToolType.none
+                    : DrawingToolType.shortPosition,
+              ),
+            ),
+            
             // Separator
             if (provider.drawings.isNotEmpty) ...[
               Container(
@@ -1801,6 +2169,104 @@ class _DrawingToolbar extends StatelessWidget {
             },
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.loss),
             child: const Text('Clear All'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PositionDetailRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final String? subValue;
+  final Color color;
+
+  const _PositionDetailRow({
+    required this.label,
+    required this.value,
+    this.subValue,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 14,
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                value,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (subValue != null)
+                Text(
+                  subValue!,
+                  style: const TextStyle(
+                    color: AppColors.textTertiary,
+                    fontSize: 11,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? color;
+
+  const _StatCard({
+    required this.label,
+    required this.value,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLight,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 10,
+              color: AppColors.textTertiary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: color ?? AppColors.textPrimary,
+            ),
           ),
         ],
       ),
