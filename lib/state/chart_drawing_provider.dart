@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import '../core/logger.dart';
 import '../models/chart_drawing.dart';
+import '../services/drawing_repository.dart';
 
 /// State management for chart drawing tools
 /// 
@@ -9,7 +11,10 @@ import '../models/chart_drawing.dart';
 /// - Drawing in progress
 /// - Selection state
 /// - Position tools (Long/Short with SL/TP)
+/// - Persistence of position tools across restarts
 class ChartDrawingProvider extends ChangeNotifier {
+  final DrawingRepository _repository = DrawingRepository();
+  
   DrawingToolType _currentTool = DrawingToolType.none;
   final List<ChartDrawing> _drawings = [];
   ChartDrawing? _activeDrawing;
@@ -21,6 +26,48 @@ class ChartDrawingProvider extends ChangeNotifier {
   double _defaultSlPercent = 2.0;  // Default stop loss percentage
   double _defaultTpPercent = 4.0;  // Default take profit percentage (2:1 R:R)
   double _defaultQuantity = 1.0;
+  
+  // State
+  bool _isInitialized = false;
+  String? _userId;
+  
+  /// Whether the provider has been initialized
+  bool get isInitialized => _isInitialized;
+  
+  /// Initialize the provider and load saved drawings
+  Future<void> init({String? userId}) async {
+    if (_isInitialized) return;
+    
+    try {
+      _userId = userId;
+      await _repository.init();
+      
+      // Load saved position tools
+      final savedTools = _repository.getPositionTools(userId: userId);
+      if (savedTools.isNotEmpty) {
+        _drawings.addAll(savedTools);
+        Log.i('Restored ${savedTools.length} position tools from storage');
+      }
+      
+      _isInitialized = true;
+      notifyListeners();
+    } catch (e) {
+      Log.e('Failed to initialize ChartDrawingProvider', e);
+    }
+  }
+  
+  /// Save all position tools to storage
+  Future<void> _savePositionTools() async {
+    if (!_repository.isInitialized) return;
+    
+    try {
+      // Clear existing and save current position tools
+      await _repository.clearAll(userId: _userId);
+      await _repository.savePositionTools(positionTools, userId: _userId);
+    } catch (e) {
+      Log.e('Failed to save position tools', e);
+    }
+  }
 
   // Getters
   DrawingToolType get currentTool => _currentTool;
@@ -186,6 +233,9 @@ class ChartDrawingProvider extends ChangeNotifier {
     // Reset tool
     _currentTool = DrawingToolType.none;
     
+    // Persist position tools
+    _savePositionTools();
+    
     notifyListeners();
   }
 
@@ -287,10 +337,19 @@ class ChartDrawingProvider extends ChangeNotifier {
 
   /// Delete a specific drawing
   void deleteDrawing(String id) {
+    // Check if this is a position tool for persistence
+    final wasPositionTool = _drawings.any((d) => d.id == id && d is PositionToolDrawing);
+    
     _drawings.removeWhere((d) => d.id == id);
     if (_selectedDrawingId == id) {
       _selectedDrawingId = null;
     }
+    
+    // Persist if a position tool was deleted
+    if (wasPositionTool) {
+      _savePositionTools();
+    }
+    
     notifyListeners();
   }
 
@@ -299,6 +358,10 @@ class ChartDrawingProvider extends ChangeNotifier {
     _drawings.clear();
     _activeDrawing = null;
     _selectedDrawingId = null;
+    
+    // Clear persisted position tools
+    _repository.clearAll(userId: _userId);
+    
     notifyListeners();
   }
 
@@ -383,6 +446,10 @@ class ChartDrawingProvider extends ChangeNotifier {
     );
     
     _drawings[index] = activated;
+    
+    // Persist the status change
+    _savePositionTools();
+    
     notifyListeners();
     
     return activated;
@@ -401,6 +468,10 @@ class ChartDrawingProvider extends ChangeNotifier {
       exitPrice: exitPrice,
       realizedPnL: realizedPnL,
     );
+    
+    // Persist the status change
+    _savePositionTools();
+    
     notifyListeners();
   }
   

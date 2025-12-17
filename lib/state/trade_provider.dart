@@ -15,6 +15,7 @@ class TradeProvider extends ChangeNotifier {
   List<Trade> _trades = [];
   bool _isLoading = false;
   String? _error;
+  String? _userId;
   
   // Filter state
   String? _symbolFilter;
@@ -22,6 +23,9 @@ class TradeProvider extends ChangeNotifier {
   TradeOutcome? _outcomeFilter;
   DateTimeRange? _dateRangeFilter;
   String _searchQuery = '';
+  
+  /// Current user ID for multi-user support
+  String? get userId => _userId;
   
   TradeProvider(this._repository);
   
@@ -68,14 +72,15 @@ class TradeProvider extends ChangeNotifier {
   // --- Initialization ---
   
   /// Initialize the provider and load trades from storage
-  Future<void> init() async {
+  Future<void> init({String? userId}) async {
     _isLoading = true;
     _error = null;
+    _userId = userId;
     notifyListeners();
     
     try {
       await _repository.init();
-      _trades = _repository.getAllTrades();
+      _trades = _repository.getAllTrades(userId: userId);
       _error = null;
     } catch (e) {
       _error = 'Failed to load trades: ${e.toString()}';
@@ -272,7 +277,7 @@ class TradeProvider extends ChangeNotifier {
   
   /// Refresh data from storage
   Future<void> refresh() async {
-    await init();
+    await init(userId: _userId);
   }
 }
 

@@ -28,8 +28,15 @@ class TradeRepository {
   }
   
   /// Get all trades, sorted by entry date (newest first)
-  List<Trade> getAllTrades() {
-    final trades = _safeBox.values.toList();
+  /// If [userId] is provided, only returns trades for that user
+  List<Trade> getAllTrades({String? userId}) {
+    var trades = _safeBox.values.toList();
+    
+    // Filter by userId if provided
+    if (userId != null) {
+      trades = trades.where((t) => t.userId == userId || t.userId == null).toList();
+    }
+    
     trades.sort((a, b) => b.entryDate.compareTo(a.entryDate));
     return trades;
   }

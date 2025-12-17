@@ -21,6 +21,9 @@ class PaperTradingEngine {
   
   // Callbacks for when trades close (to sync with journal)
   void Function(Trade trade)? onTradeClosed;
+  
+  /// Callback when a position is closed (for cleaning up position tools)
+  void Function(String positionId, String? linkedToolId)? onPositionClosed;
 
   PaperTradingEngine({
     double initialBalance = 10000.0,
@@ -76,6 +79,7 @@ class PaperTradingEngine {
     required double currentPrice,
     double? stopLoss,
     double? takeProfit,
+    String? linkedToolId,
   }) {
     final order = PaperOrder(
       id: _uuid.v4(),
@@ -86,7 +90,7 @@ class PaperTradingEngine {
     );
     
     // Execute immediately
-    _executeOrder(order, currentPrice, stopLoss: stopLoss, takeProfit: takeProfit);
+    _executeOrder(order, currentPrice, stopLoss: stopLoss, takeProfit: takeProfit, linkedToolId: linkedToolId);
     _orderHistory.add(order);
     
     return order;
@@ -98,6 +102,7 @@ class PaperTradingEngine {
     double price, {
     double? stopLoss,
     double? takeProfit,
+    String? linkedToolId,
   }) {
     // Check if we have an existing position in this symbol
     final existingPosition = getPositionForSymbol(order.symbol);
@@ -113,7 +118,7 @@ class PaperTradingEngine {
       }
     } else {
       // Open new position
-      _openNewPosition(order, price, stopLoss: stopLoss, takeProfit: takeProfit);
+      _openNewPosition(order, price, stopLoss: stopLoss, takeProfit: takeProfit, linkedToolId: linkedToolId);
     }
     
     // Update order status
@@ -128,6 +133,7 @@ class PaperTradingEngine {
     double price, {
     double? stopLoss,
     double? takeProfit,
+    String? linkedToolId,
   }) {
     final cost = order.quantity * price;
     
@@ -142,6 +148,7 @@ class PaperTradingEngine {
       entryPrice: price,
       stopLoss: stopLoss,
       takeProfit: takeProfit,
+      linkedToolId: linkedToolId,
     );
     
     _openPositions.add(position);
@@ -191,6 +198,9 @@ class PaperTradingEngine {
     
     // Create journal entry for the closed trade
     _createJournalEntry(position);
+    
+    // Notify listeners that position was closed (for cleaning up chart tools)
+    onPositionClosed?.call(position.id, position.linkedToolId);
   }
 
   /// Close position by ID
@@ -266,6 +276,10 @@ class PaperTradingEngine {
       exitDate: position.closedAt,
       tags: ['paper-trade'],
       notes: 'Paper trade - ${position.realizedPnL! >= 0 ? "WIN" : "LOSS"}',
+      stopLoss: position.stopLoss,
+      takeProfit: position.takeProfit,
+      linkedToolId: position.linkedToolId,
+      userId: position.userId,
     );
     
     // Notify listeners to save to journal
@@ -285,6 +299,31 @@ class PaperTradingEngine {
     _openPositions.clear();
     _closedPositions.clear();
     _orderHistory.clear();
+  }
+  
+  /// Restore account from persisted state
+  void restoreAccount(PaperAccount account) {
+    _account = account;
+  }
+  
+  /// Restore positions from persisted state
+  void restorePositions(List<PaperPosition> positions) {
+    _openPositions.clear();
+    _closedPositions.clear();
+    
+    for (final position in positions) {
+      if (position.isOpen) {
+        _openPositions.add(position);
+      } else {
+        _closedPositions.add(position);
+      }
+    }
+  }
+  
+  /// Restore orders from persisted state
+  void restoreOrders(List<PaperOrder> orders) {
+    _orderHistory.clear();
+    _orderHistory.addAll(orders);
   }
 
   /// Add funds to account

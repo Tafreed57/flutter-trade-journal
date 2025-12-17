@@ -61,6 +61,21 @@ class _ChartScreenState extends State<ChartScreen> {
         Log.d('ChartScreen: Triggering MarketDataProvider.init()');
         marketProvider.init();
       }
+      
+      // Wire up position tool cleanup callback
+      // When a position closes, automatically remove/hide its linked tool
+      final paperProvider = context.read<PaperTradingProvider>();
+      final drawingProvider = context.read<ChartDrawingProvider>();
+      
+      paperProvider.onToolShouldBeRemoved = (toolId) {
+        Log.d('ChartScreen: Removing position tool $toolId after position closed');
+        drawingProvider.deleteDrawing(toolId);
+        
+        // Refresh trade list to show the new closed trade
+        if (mounted) {
+          context.read<TradeProvider>().refresh();
+        }
+      };
     });
   }
 
@@ -943,7 +958,7 @@ class _ChartScreenState extends State<ChartScreen> {
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       onPressed: () {
-                        // Create actual position
+                        // Create actual position with linked tool ID
                         final positionId = paperProvider.openPositionFromTool(
                           symbol: tool.symbol,
                           isLong: tool.isLong,
@@ -951,6 +966,7 @@ class _ChartScreenState extends State<ChartScreen> {
                           quantity: tool.quantity,
                           stopLoss: tool.stopLossPrice,
                           takeProfit: tool.takeProfitPrice,
+                          toolId: tool.id, // Link the tool to the position
                         );
                         
                         if (positionId != null) {
@@ -1554,10 +1570,12 @@ class _TradingPanelState extends State<_TradingPanel> with SingleTickerProviderS
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () {
-              provider.resetAccount();
-              Navigator.pop(context);
-              _showSnackBar(context, 'Account reset to \$10,000', AppColors.accent);
+            onPressed: () async {
+              await provider.resetAccount();
+              if (context.mounted) {
+                Navigator.pop(context);
+                _showSnackBar(context, 'Account reset to \$10,000', AppColors.accent);
+              }
             },
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.loss),
             child: const Text('Reset'),

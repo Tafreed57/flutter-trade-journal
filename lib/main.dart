@@ -169,8 +169,13 @@ class _AppInitializerState extends State<AppInitializer> {
 
   Future<void> _initializeApp() async {
     try {
-      // Initialize the trade provider (which initializes the repository)
-      await context.read<TradeProvider>().init();
+      // Get userId from auth for multi-user support
+      final userId = context.read<AuthProvider>().user?.uid;
+      
+      // Initialize all providers with userId for multi-user support
+      await context.read<TradeProvider>().init(userId: userId);
+      await context.read<PaperTradingProvider>().init(userId: userId);
+      await context.read<ChartDrawingProvider>().init(userId: userId);
 
       if (mounted) {
         setState(() => _isInitialized = true);

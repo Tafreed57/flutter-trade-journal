@@ -22,13 +22,14 @@ class PaperAccountAdapter extends TypeAdapter<PaperAccount> {
       initialBalance: fields[2] as double,
       realizedPnL: fields[3] as double,
       createdAt: fields[4] as DateTime?,
+      userId: fields[5] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, PaperAccount obj) {
     writer
-      ..writeByte(5)
+      ..writeByte(6)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -38,7 +39,9 @@ class PaperAccountAdapter extends TypeAdapter<PaperAccount> {
       ..writeByte(3)
       ..write(obj.realizedPnL)
       ..writeByte(4)
-      ..write(obj.createdAt);
+      ..write(obj.createdAt)
+      ..writeByte(5)
+      ..write(obj.userId);
   }
 
   @override
@@ -135,13 +138,15 @@ class PaperPositionAdapter extends TypeAdapter<PaperPosition> {
       closedAt: fields[8] as DateTime?,
       exitPrice: fields[9] as double?,
       realizedPnL: fields[10] as double?,
+      linkedToolId: fields[11] as String?,
+      userId: fields[12] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, PaperPosition obj) {
     writer
-      ..writeByte(11)
+      ..writeByte(13)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -163,7 +168,11 @@ class PaperPositionAdapter extends TypeAdapter<PaperPosition> {
       ..writeByte(9)
       ..write(obj.exitPrice)
       ..writeByte(10)
-      ..write(obj.realizedPnL);
+      ..write(obj.realizedPnL)
+      ..writeByte(11)
+      ..write(obj.linkedToolId)
+      ..writeByte(12)
+      ..write(obj.userId);
   }
 
   @override

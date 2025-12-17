@@ -82,6 +82,14 @@ class Trade extends HiveObject {
   @HiveField(15)
   final String? setup; // Trade setup type (breakout, reversal, etc.)
   
+  /// User ID for multi-user support
+  @HiveField(16)
+  final String? userId;
+  
+  /// Linked position tool ID (for chart integration)
+  @HiveField(17)
+  final String? linkedToolId;
+  
   Trade({
     required this.id,
     required this.symbol,
@@ -99,6 +107,8 @@ class Trade extends HiveObject {
     this.takeProfit,
     this.screenshotPath,
     this.setup,
+    this.userId,
+    this.linkedToolId,
   })  : tags = tags ?? [],
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
@@ -196,6 +206,8 @@ class Trade extends HiveObject {
     double? takeProfit,
     String? screenshotPath,
     String? setup,
+    String? userId,
+    String? linkedToolId,
   }) {
     return Trade(
       id: id ?? this.id,
@@ -214,6 +226,8 @@ class Trade extends HiveObject {
       takeProfit: takeProfit ?? this.takeProfit,
       screenshotPath: screenshotPath ?? this.screenshotPath,
       setup: setup ?? this.setup,
+      userId: userId ?? this.userId,
+      linkedToolId: linkedToolId ?? this.linkedToolId,
     );
   }
   

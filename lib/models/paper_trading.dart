@@ -19,6 +19,10 @@ class PaperAccount extends HiveObject {
 
   @HiveField(4)
   final DateTime createdAt;
+  
+  /// User ID for multi-user support
+  @HiveField(5)
+  String? userId;
 
   PaperAccount({
     required this.id,
@@ -26,6 +30,7 @@ class PaperAccount extends HiveObject {
     required this.initialBalance,
     this.realizedPnL = 0,
     DateTime? createdAt,
+    this.userId,
   }) : createdAt = createdAt ?? DateTime.now();
 
   /// Total return as percentage
@@ -41,6 +46,7 @@ class PaperAccount extends HiveObject {
     double? initialBalance,
     double? realizedPnL,
     DateTime? createdAt,
+    String? userId,
   }) {
     return PaperAccount(
       id: id ?? this.id,
@@ -48,6 +54,7 @@ class PaperAccount extends HiveObject {
       initialBalance: initialBalance ?? this.initialBalance,
       realizedPnL: realizedPnL ?? this.realizedPnL,
       createdAt: createdAt ?? this.createdAt,
+      userId: userId ?? this.userId,
     );
   }
 }
@@ -180,6 +187,14 @@ class PaperPosition extends HiveObject {
 
   @HiveField(10)
   double? realizedPnL;
+  
+  /// Linked position tool ID (for chart display)
+  @HiveField(11)
+  String? linkedToolId;
+  
+  /// User ID for multi-user support
+  @HiveField(12)
+  String? userId;
 
   PaperPosition({
     required this.id,
@@ -193,6 +208,8 @@ class PaperPosition extends HiveObject {
     this.closedAt,
     this.exitPrice,
     this.realizedPnL,
+    this.linkedToolId,
+    this.userId,
   }) : openedAt = openedAt ?? DateTime.now();
 
   /// Whether this is a long position
@@ -249,6 +266,8 @@ class PaperPosition extends HiveObject {
     DateTime? closedAt,
     double? exitPrice,
     double? realizedPnL,
+    String? linkedToolId,
+    String? userId,
   }) {
     return PaperPosition(
       id: id ?? this.id,
@@ -262,6 +281,8 @@ class PaperPosition extends HiveObject {
       closedAt: closedAt ?? this.closedAt,
       exitPrice: exitPrice ?? this.exitPrice,
       realizedPnL: realizedPnL ?? this.realizedPnL,
+      linkedToolId: linkedToolId ?? this.linkedToolId,
+      userId: userId ?? this.userId,
     );
   }
 }

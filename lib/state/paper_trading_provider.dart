@@ -5,6 +5,7 @@ import '../models/live_price.dart';
 import '../models/paper_trading.dart';
 import '../models/trade.dart';
 import '../services/paper_trading_engine.dart';
+import '../services/paper_trading_repository.dart';
 import '../services/trade_repository.dart';
 
 /// State management for paper trading
@@ -12,9 +13,11 @@ import '../services/trade_repository.dart';
 /// Manages the paper trading engine and syncs with:
 /// - Live price updates (for P&L calculation and SL/TP triggers)
 /// - Trade journal (auto-logging closed positions)
+/// - Persistent storage (paper account, positions survive restart)
 class PaperTradingProvider extends ChangeNotifier {
   final PaperTradingEngine _engine;
   final TradeRepository _tradeRepository;
+  final PaperTradingRepository _paperRepository;
 
   // Current prices for P&L calculation
   final Map<String, double> _currentPrices = {};
@@ -24,10 +27,85 @@ class PaperTradingProvider extends ChangeNotifier {
   double? _stopLossPercent;
   double? _takeProfitPercent;
   String? _error;
+  bool _isInitialized = false;
+  
+  /// Whether the provider has been initialized
+  bool get isInitialized => _isInitialized;
+  
+  /// Current user ID for multi-user support
+  String? _userId;
+  String? get userId => _userId;
+  
+  /// Callback to notify when a position is closed and its tool should be removed
+  /// This is set by the chart screen or whoever needs to clean up drawings
+  void Function(String toolId)? onToolShouldBeRemoved;
 
-  PaperTradingProvider(this._tradeRepository) : _engine = PaperTradingEngine() {
+  PaperTradingProvider(this._tradeRepository) 
+      : _engine = PaperTradingEngine(),
+        _paperRepository = PaperTradingRepository() {
     // Set up callback to save closed trades to journal
     _engine.onTradeClosed = _onTradeClosed;
+    
+    // Set up callback to clean up position tools when positions close
+    _engine.onPositionClosed = _onPositionClosed;
+  }
+  
+  /// Initialize the provider - load state from storage
+  Future<void> init({String? userId}) async {
+    if (_isInitialized) return;
+    
+    try {
+      _userId = userId;
+      await _paperRepository.init();
+      
+      // Load saved account
+      final savedAccount = _paperRepository.getAccount(userId: userId);
+      if (savedAccount != null) {
+        _engine.restoreAccount(savedAccount);
+        Log.trade('Restored paper account: \$${savedAccount.balance.toStringAsFixed(2)}');
+      }
+      
+      // Load saved positions
+      final savedPositions = _paperRepository.getOpenPositions(userId: userId);
+      if (savedPositions.isNotEmpty) {
+        _engine.restorePositions(savedPositions);
+        Log.trade('Restored ${savedPositions.length} open positions');
+      }
+      
+      _isInitialized = true;
+      notifyListeners();
+    } catch (e) {
+      Log.e('Failed to initialize PaperTradingProvider', e);
+    }
+  }
+  
+  /// Save current state to storage
+  Future<void> _saveState() async {
+    if (!_paperRepository.isInitialized) return;
+    
+    try {
+      // Save account
+      await _paperRepository.saveAccount(_engine.account, userId: _userId);
+      
+      // Save open positions
+      await _paperRepository.savePositions(_engine.openPositions.toList());
+      
+      // Also save closed positions for history
+      await _paperRepository.savePositions(_engine.closedPositions.toList());
+    } catch (e) {
+      Log.e('Failed to save paper trading state', e);
+    }
+  }
+  
+  /// Handle position closed - notify to remove position tool from chart and save state
+  void _onPositionClosed(String positionId, String? linkedToolId) {
+    if (linkedToolId != null) {
+      Log.trade('Position closed, removing tool: $linkedToolId');
+      onToolShouldBeRemoved?.call(linkedToolId);
+    }
+    
+    // Save state after position close
+    _saveState();
   }
 
   // ==================== GETTERS ====================
@@ -113,6 +191,7 @@ class PaperTradingProvider extends ChangeNotifier {
       );
 
       _currentPrices[symbol] = currentPrice;
+      _saveState(); // Persist after trade
       notifyListeners();
       return true;
     } catch (e) {
@@ -148,6 +227,7 @@ class PaperTradingProvider extends ChangeNotifier {
       );
 
       _currentPrices[symbol] = currentPrice;
+      _saveState(); // Persist after trade
       notifyListeners();
       return true;
     } catch (e) {
@@ -172,6 +252,7 @@ class PaperTradingProvider extends ChangeNotifier {
       }
 
       _engine.closePosition(positionId, currentPrice);
+      // State is saved in _onPositionClosed callback
       notifyListeners();
       return true;
     } catch (e) {
@@ -184,6 +265,7 @@ class PaperTradingProvider extends ChangeNotifier {
   /// Close all open positions
   void closeAllPositions() {
     _engine.closeAllPositions(_currentPrices);
+    // State is saved in _onPositionClosed callback for each position
     notifyListeners();
   }
 
@@ -222,9 +304,16 @@ class PaperTradingProvider extends ChangeNotifier {
   // ==================== ACCOUNT MANAGEMENT ====================
 
   /// Reset account to starting balance
-  void resetAccount({double? newBalance}) {
+  Future<void> resetAccount({double? newBalance}) async {
     _engine.resetAccount(newBalance: newBalance);
     _currentPrices.clear();
+    
+    // Clear persisted state
+    if (_paperRepository.isInitialized) {
+      await _paperRepository.deleteAccount(userId: _userId);
+      await _paperRepository.clearPositions(userId: _userId);
+    }
+    
     notifyListeners();
   }
 
@@ -263,6 +352,7 @@ class PaperTradingProvider extends ChangeNotifier {
   
   /// Create a position from a position tool
   /// Returns the position ID if successful
+  /// [toolId] - The ID of the PositionToolDrawing that created this position
   String? openPositionFromTool({
     required String symbol,
     required bool isLong,
@@ -270,6 +360,7 @@ class PaperTradingProvider extends ChangeNotifier {
     required double quantity,
     required double stopLoss,
     required double takeProfit,
+    String? toolId,
   }) {
     try {
       _error = null;
@@ -281,9 +372,11 @@ class PaperTradingProvider extends ChangeNotifier {
         currentPrice: entryPrice,
         stopLoss: stopLoss,
         takeProfit: takeProfit,
+        linkedToolId: toolId,
       );
       
       _currentPrices[symbol] = entryPrice;
+      _saveState(); // Persist after trade
       notifyListeners();
       
       // Return the newly created position ID

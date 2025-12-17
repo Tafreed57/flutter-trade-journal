@@ -33,13 +33,15 @@ class TradeAdapter extends TypeAdapter<Trade> {
       takeProfit: fields[13] as double?,
       screenshotPath: fields[14] as String?,
       setup: fields[15] as String?,
+      userId: fields[16] as String?,
+      linkedToolId: fields[17] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Trade obj) {
     writer
-      ..writeByte(16)
+      ..writeByte(18)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -71,7 +73,11 @@ class TradeAdapter extends TypeAdapter<Trade> {
       ..writeByte(14)
       ..write(obj.screenshotPath)
       ..writeByte(15)
-      ..write(obj.setup);
+      ..write(obj.setup)
+      ..writeByte(16)
+      ..write(obj.userId)
+      ..writeByte(17)
+      ..write(obj.linkedToolId);
   }
 
   @override
