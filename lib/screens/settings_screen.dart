@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../state/auth_provider.dart';
 import '../state/theme_provider.dart';
+import '../state/trade_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/position_size_calculator.dart';
 import '../main.dart' show isFirebaseAvailable;
@@ -27,7 +28,7 @@ class SettingsScreen extends StatelessWidget {
           // Profile section
           _buildProfileSection(context),
           const SizedBox(height: 24),
-          
+
           // App settings
           _buildSectionHeader(context, 'App Settings'),
           _buildThemeToggle(context),
@@ -49,9 +50,9 @@ class SettingsScreen extends StatelessWidget {
             subtitle: 'USD (\$)',
             onTap: () => _showCurrencyPicker(context),
           ),
-          
+
           const SizedBox(height: 24),
-          
+
           // Trading Tools
           _buildSectionHeader(context, 'Trading Tools'),
           _buildSettingsTile(
@@ -61,9 +62,9 @@ class SettingsScreen extends StatelessWidget {
             subtitle: 'Calculate optimal position based on risk',
             onTap: () => PositionSizeCalculator.show(context),
           ),
-          
+
           const SizedBox(height: 24),
-          
+
           // Data section
           _buildSectionHeader(context, 'Data'),
           _buildSettingsTile(
@@ -72,8 +73,12 @@ class SettingsScreen extends StatelessWidget {
             title: 'Cloud Sync',
             subtitle: isFirebaseAvailable ? 'Synced' : 'Local only',
             trailing: Icon(
-              isFirebaseAvailable ? Icons.check_circle_rounded : Icons.cloud_off_rounded,
-              color: isFirebaseAvailable ? AppColors.profit : AppColors.textTertiary,
+              isFirebaseAvailable
+                  ? Icons.check_circle_rounded
+                  : Icons.cloud_off_rounded,
+              color: isFirebaseAvailable
+                  ? AppColors.profit
+                  : AppColors.textTertiary,
               size: 20,
             ),
           ),
@@ -92,9 +97,9 @@ class SettingsScreen extends StatelessWidget {
             iconColor: AppColors.loss,
             onTap: () => _showClearDataDialog(context),
           ),
-          
+
           const SizedBox(height: 24),
-          
+
           // About section
           _buildSectionHeader(context, 'About'),
           _buildSettingsTile(
@@ -115,19 +120,41 @@ class SettingsScreen extends StatelessWidget {
             title: 'Privacy Policy',
             onTap: () {},
           ),
-          
+
           const SizedBox(height: 32),
-          
+
+          // Clear all trades button
+          OutlinedButton.icon(
+            onPressed: () => _handleClearAllTrades(context),
+            icon: const Icon(
+              Icons.delete_forever_rounded,
+              color: AppColors.warning,
+            ),
+            label: const Text(
+              'Clear All Trades',
+              style: TextStyle(color: AppColors.warning),
+            ),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: AppColors.warning),
+              padding: const EdgeInsets.symmetric(vertical: 16),
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
           // Sign out button
           if (isFirebaseAvailable) ...[
             Consumer<AuthProvider>(
               builder: (context, auth, _) {
                 if (!auth.isAuthenticated) return const SizedBox.shrink();
-                
+
                 return OutlinedButton.icon(
                   onPressed: () => _handleSignOut(context),
                   icon: const Icon(Icons.logout_rounded, color: AppColors.loss),
-                  label: const Text('Sign Out', style: TextStyle(color: AppColors.loss)),
+                  label: const Text(
+                    'Sign Out',
+                    style: TextStyle(color: AppColors.loss),
+                  ),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: AppColors.loss),
                     padding: const EdgeInsets.symmetric(vertical: 16),
@@ -136,7 +163,7 @@ class SettingsScreen extends StatelessWidget {
               },
             ),
           ],
-          
+
           const SizedBox(height: 48),
         ],
       ),
@@ -186,7 +213,7 @@ class SettingsScreen extends StatelessWidget {
                       ),
               ),
               const SizedBox(width: 16),
-              
+
               // User info
               Expanded(
                 child: Column(
@@ -200,13 +227,15 @@ class SettingsScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      isLoggedIn ? (user.email ?? '') : 'Local mode - data stored on device',
+                      isLoggedIn
+                          ? (user.email ?? '')
+                          : 'Local mode - data stored on device',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
                 ),
               ),
-              
+
               // Edit button
               if (isLoggedIn)
                 IconButton(
@@ -227,9 +256,9 @@ class SettingsScreen extends StatelessWidget {
       child: Text(
         title.toUpperCase(),
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              letterSpacing: 1.2,
-              fontWeight: FontWeight.w600,
-            ),
+          letterSpacing: 1.2,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -238,7 +267,7 @@ class SettingsScreen extends StatelessWidget {
     return Consumer<ThemeProvider>(
       builder: (context, themeProvider, _) {
         final isDark = themeProvider.isDark;
-        
+
         return Container(
           margin: const EdgeInsets.only(bottom: 8),
           decoration: BoxDecoration(
@@ -261,7 +290,10 @@ class SettingsScreen extends StatelessWidget {
                 size: 20,
               ),
             ),
-            title: const Text('Theme', style: TextStyle(fontWeight: FontWeight.w500)),
+            title: const Text(
+              'Theme',
+              style: TextStyle(fontWeight: FontWeight.w500),
+            ),
             subtitle: Text(
               isDark ? 'Dark' : 'Light',
               style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
@@ -281,7 +313,8 @@ class SettingsScreen extends StatelessWidget {
                       _ThemeButton(
                         icon: Icons.light_mode_rounded,
                         isSelected: !isDark,
-                        onTap: () => themeProvider.setThemeMode(ThemeMode.light),
+                        onTap: () =>
+                            themeProvider.setThemeMode(ThemeMode.light),
                       ),
                       _ThemeButton(
                         icon: Icons.dark_mode_rounded,
@@ -293,8 +326,13 @@ class SettingsScreen extends StatelessWidget {
                 ),
               ],
             ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 4,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
           ),
         );
       },
@@ -382,11 +420,19 @@ class SettingsScreen extends StatelessWidget {
         ),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w500)),
         subtitle: subtitle != null
-            ? Text(subtitle, style: TextStyle(color: AppColors.textSecondary, fontSize: 12))
+            ? Text(
+                subtitle,
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+              )
             : null,
-        trailing: trailing ?? (onTap != null
-            ? Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary)
-            : null),
+        trailing:
+            trailing ??
+            (onTap != null
+                ? Icon(
+                    Icons.chevron_right_rounded,
+                    color: AppColors.textTertiary,
+                  )
+                : null),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
@@ -406,20 +452,28 @@ class SettingsScreen extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Select Currency', style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              'Select Currency',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const SizedBox(height: 16),
             ...[
               ('USD', '\$ US Dollar'),
               ('EUR', '€ Euro'),
               ('GBP', '£ British Pound'),
               ('JPY', '¥ Japanese Yen'),
-            ].map((c) => ListTile(
-              title: Text(c.$2),
-              trailing: c.$1 == 'USD'
-                  ? const Icon(Icons.check_circle_rounded, color: AppColors.accent)
-                  : null,
-              onTap: () => Navigator.pop(context),
-            )),
+            ].map(
+              (c) => ListTile(
+                title: Text(c.$2),
+                trailing: c.$1 == 'USD'
+                    ? const Icon(
+                        Icons.check_circle_rounded,
+                        color: AppColors.accent,
+                      )
+                    : null,
+                onTap: () => Navigator.pop(context),
+              ),
+            ),
           ],
         ),
       ),
@@ -455,6 +509,42 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
+  Future<void> _handleClearAllTrades(BuildContext context) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear All Trades?'),
+        content: const Text(
+          'This will permanently delete ALL trades from the database. This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.loss),
+            child: const Text('Delete All'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true && context.mounted) {
+      final success = await context.read<TradeProvider>().clearAllTrades();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              success ? 'All trades cleared' : 'Failed to clear trades',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _handleSignOut(BuildContext context) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -475,7 +565,12 @@ class SettingsScreen extends StatelessWidget {
     );
 
     if (confirm == true && context.mounted) {
-      await context.read<AuthProvider>().signOut();
+      final success = await context.read<AuthProvider>().signOut();
+
+      // Pop back to root so AuthGate can show LoginScreen
+      if (success && context.mounted) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      }
     }
   }
 }
@@ -537,7 +632,7 @@ class _ThemeOption extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: isSelected 
+          color: isSelected
               ? AppColors.accent.withOpacity(0.1)
               : AppColors.surfaceLight,
           borderRadius: BorderRadius.circular(12),
@@ -551,7 +646,7 @@ class _ThemeOption extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: isSelected 
+                color: isSelected
                     ? AppColors.accent.withOpacity(0.2)
                     : AppColors.surface,
                 borderRadius: BorderRadius.circular(10),
@@ -570,7 +665,9 @@ class _ThemeOption extends StatelessWidget {
                     title,
                     style: TextStyle(
                       fontWeight: FontWeight.w600,
-                      color: isSelected ? AppColors.accent : AppColors.textPrimary,
+                      color: isSelected
+                          ? AppColors.accent
+                          : AppColors.textPrimary,
                     ),
                   ),
                   Text(
@@ -591,4 +688,3 @@ class _ThemeOption extends StatelessWidget {
     );
   }
 }
-

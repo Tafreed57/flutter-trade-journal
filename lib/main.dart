@@ -34,69 +34,72 @@ bool get isFirebaseAvailable => _firebaseAvailable;
 void main() async {
   // Set up global error handlers for release builds
   _setupErrorHandlers();
-  
-  runZonedGuarded(() async {
-    WidgetsFlutterBinding.ensureInitialized();
 
-    // Initialize Firebase
-    try {
-      await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
+  runZonedGuarded(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+
+      // Initialize Firebase
+      try {
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform,
+        );
+        _firebaseAvailable = true;
+        Log.i('Firebase initialized successfully');
+      } catch (e) {
+        Log.w('Firebase initialization failed - running offline: $e');
+        _firebaseAvailable = false;
+      }
+
+      // Load environment variables (API keys, etc.)
+      await EnvConfig.load();
+
+      // Initialize Hive for local storage
+      await Hive.initFlutter();
+
+      // Register Hive type adapters - Trade models
+      Hive.registerAdapter(TradeSideAdapter());
+      Hive.registerAdapter(TradeOutcomeAdapter());
+      Hive.registerAdapter(TradeAdapter());
+
+      // Register Hive type adapters - Paper trading models
+      Hive.registerAdapter(PaperAccountAdapter());
+      Hive.registerAdapter(OrderSideAdapter());
+      Hive.registerAdapter(OrderTypeAdapter());
+      Hive.registerAdapter(OrderStatusAdapter());
+
+      // Initialize MarketDataEngine (for chart data persistence)
+      await MarketDataEngine.instance.init();
+      Hive.registerAdapter(PaperOrderAdapter());
+      Hive.registerAdapter(PaperPositionAdapter());
+
+      // Set preferred orientations (allow landscape on desktop/tablet)
+      if (!kIsWeb) {
+        await SystemChrome.setPreferredOrientations([
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]);
+      }
+
+      // Set system UI overlay style for dark theme
+      SystemChrome.setSystemUIOverlayStyle(
+        const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.light,
+          systemNavigationBarColor: AppColors.background,
+          systemNavigationBarIconBrightness: Brightness.light,
+        ),
       );
-      _firebaseAvailable = true;
-      Log.i('Firebase initialized successfully');
-    } catch (e) {
-      Log.w('Firebase initialization failed - running offline: $e');
-      _firebaseAvailable = false;
-    }
 
-    // Load environment variables (API keys, etc.)
-    await EnvConfig.load();
-
-    // Initialize Hive for local storage
-    await Hive.initFlutter();
-
-    // Register Hive type adapters - Trade models
-    Hive.registerAdapter(TradeSideAdapter());
-    Hive.registerAdapter(TradeOutcomeAdapter());
-    Hive.registerAdapter(TradeAdapter());
-
-    // Register Hive type adapters - Paper trading models
-    Hive.registerAdapter(PaperAccountAdapter());
-    Hive.registerAdapter(OrderSideAdapter());
-    Hive.registerAdapter(OrderTypeAdapter());
-    Hive.registerAdapter(OrderStatusAdapter());
-
-    // Initialize MarketDataEngine (for chart data persistence)
-    await MarketDataEngine.instance.init();
-    Hive.registerAdapter(PaperOrderAdapter());
-    Hive.registerAdapter(PaperPositionAdapter());
-
-    // Set preferred orientations (allow landscape on desktop/tablet)
-    if (!kIsWeb) {
-      await SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-    }
-
-    // Set system UI overlay style for dark theme
-    SystemChrome.setSystemUIOverlayStyle(
-      const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.light,
-        systemNavigationBarColor: AppColors.background,
-        systemNavigationBarIconBrightness: Brightness.light,
-      ),
-    );
-
-    runApp(const TradingJournalApp());
-  }, (error, stackTrace) {
-    // Catch any errors not caught by Flutter's error handling
-    Log.e('Unhandled error in zone', error, stackTrace);
-  });
+      runApp(const TradingJournalApp());
+    },
+    (error, stackTrace) {
+      // Catch any errors not caught by Flutter's error handling
+      Log.e('Unhandled error in zone', error, stackTrace);
+    },
+  );
 }
 
 /// Set up global error handlers
@@ -112,7 +115,7 @@ void _setupErrorHandlers() {
       FlutterError.presentError(details);
     }
   };
-  
+
   // Handle platform dispatcher errors (Dart runtime errors)
   PlatformDispatcher.instance.onError = (error, stack) {
     Log.e('Platform error', error, stack);
@@ -129,9 +132,7 @@ class TradingJournalApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         // Authentication provider
-        ChangeNotifierProvider<AuthProvider>(
-          create: (_) => AuthProvider(),
-        ),
+        ChangeNotifierProvider<AuthProvider>(create: (_) => AuthProvider()),
 
         // Repository (single instance)
         Provider<TradeRepository>(
@@ -163,9 +164,7 @@ class TradingJournalApp extends StatelessWidget {
         ),
 
         // Theme provider for light/dark mode
-        ChangeNotifierProvider<ThemeProvider>(
-          create: (_) => ThemeProvider(),
-        ),
+        ChangeNotifierProvider<ThemeProvider>(create: (_) => ThemeProvider()),
       ],
       child: Consumer<ThemeProvider>(
         builder: (context, themeProvider, _) {
@@ -184,6 +183,7 @@ class TradingJournalApp extends StatelessWidget {
 }
 
 /// Handles app initialization and shows loading state
+/// Also watches for auth changes to reinitialize providers with new userId
 class AppInitializer extends StatefulWidget {
   const AppInitializer({super.key});
 
@@ -194,6 +194,7 @@ class AppInitializer extends StatefulWidget {
 class _AppInitializerState extends State<AppInitializer> {
   bool _isInitialized = false;
   String? _initError;
+  String? _lastUserId; // Track current user to detect changes
 
   @override
   void initState() {
@@ -205,11 +206,35 @@ class _AppInitializerState extends State<AppInitializer> {
     });
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Check if auth state changed (user logged in/out)
+    final authProvider = context.watch<AuthProvider>();
+    final currentUserId = authProvider.user?.uid;
+
+    // If user changed and we're already initialized, reinitialize
+    // IMPORTANT: Defer to post-frame to avoid setState during build
+    if (_isInitialized && currentUserId != _lastUserId) {
+      Log.i(
+        'Auth changed: $_lastUserId -> $currentUserId, reinitializing providers',
+      );
+      // Schedule reinitialization AFTER build completes to avoid
+      // "setState() called during build" error
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _reinitializeForNewUser(currentUserId);
+        }
+      });
+    }
+  }
+
   Future<void> _initializeApp() async {
     try {
       // Get userId from auth for multi-user support
       final userId = context.read<AuthProvider>().user?.uid;
-      
+      _lastUserId = userId;
+
       // Initialize all providers with userId for multi-user support
       await context.read<TradeProvider>().init(userId: userId);
       await context.read<PaperTradingProvider>().init(userId: userId);
@@ -222,6 +247,23 @@ class _AppInitializerState extends State<AppInitializer> {
       if (mounted) {
         setState(() => _initError = e.toString());
       }
+    }
+  }
+
+  /// Reinitialize all providers when a different user logs in
+  Future<void> _reinitializeForNewUser(String? newUserId) async {
+    Log.i('Reinitializing providers for user: $newUserId');
+    _lastUserId = newUserId;
+
+    try {
+      // Clear and reinitialize all data providers with new userId
+      await context.read<TradeProvider>().init(userId: newUserId);
+      await context.read<PaperTradingProvider>().init(userId: newUserId);
+      await context.read<ChartDrawingProvider>().init(userId: newUserId);
+
+      Log.i('Providers reinitialized successfully for user: $newUserId');
+    } catch (e) {
+      Log.e('Failed to reinitialize providers', e);
     }
   }
 

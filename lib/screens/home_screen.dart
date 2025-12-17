@@ -11,7 +11,7 @@ import 'add_trade_screen.dart';
 import 'trade_detail_screen.dart';
 
 /// Main home screen displaying the trade list
-/// 
+///
 /// Shows all trades with filtering, search, and quick stats.
 /// Handles empty states and loading states gracefully.
 class HomeScreen extends StatefulWidget {
@@ -40,14 +40,12 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             // Header
             _buildHeader(context),
-            
+
             // Quick stats bar
             _buildQuickStats(context),
-            
+
             // Trade list
-            Expanded(
-              child: _buildTradeList(context),
-            ),
+            Expanded(child: _buildTradeList(context)),
           ],
         ),
       ),
@@ -83,7 +81,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          
+
           // Search toggle
           IconButton(
             onPressed: () {
@@ -100,7 +98,7 @@ class _HomeScreenState extends State<HomeScreen> {
               color: AppColors.textSecondary,
             ),
           ),
-          
+
           // Filter button
           Consumer<TradeProvider>(
             builder: (context, provider, _) {
@@ -131,7 +129,7 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
           ),
-          
+
           // More options menu (export, etc.)
           PopupMenuButton<String>(
             icon: const Icon(
@@ -197,9 +195,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
-              
+
               if (_showSearch) const SizedBox(height: 12),
-              
+
               // Stats row
               Row(
                 children: [
@@ -236,42 +234,59 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildTradeList(BuildContext context) {
     return Consumer<TradeProvider>(
       builder: (context, provider, _) {
+        // Loading state
         if (provider.isLoading) {
-          return const Center(
-            child: CircularProgressIndicator(
-              color: AppColors.accent,
-            ),
-          );
-        }
-
-        if (provider.hasError) {
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(
-                  Icons.error_outline_rounded,
-                  size: 48,
-                  color: AppColors.loss,
-                ),
+                const CircularProgressIndicator(color: AppColors.accent),
                 const SizedBox(height: 16),
                 Text(
-                  'Something went wrong',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  provider.error ?? 'Unknown error',
-                  style: Theme.of(context).textTheme.bodySmall,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 16),
-                ElevatedButton.icon(
-                  onPressed: () => provider.refresh(),
-                  icon: const Icon(Icons.refresh_rounded),
-                  label: const Text('Retry'),
+                  'Loading trades...',
+                  style: Theme.of(context).textTheme.bodyMedium,
                 ),
               ],
+            ),
+          );
+        }
+
+        // Error state with retry
+        if (provider.hasError) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.cloud_off_rounded,
+                    size: 48,
+                    color: AppColors.loss,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Failed to Load Trades',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    provider.error ?? 'Check your connection and try again',
+                    style: Theme.of(context).textTheme.bodySmall,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton.icon(
+                    onPressed: () => provider.refresh(),
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Retry'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
             ),
           );
         }
@@ -316,12 +331,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildFAB(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: FloatingActionButton.extended(
+      child: FloatingActionButton(
         onPressed: () => _navigateToAddTrade(context),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Add Trade'),
         elevation: 4,
-        extendedPadding: const EdgeInsets.symmetric(horizontal: 20),
+        tooltip: 'Add Trade',
+        child: const Icon(Icons.add_rounded),
       ),
     );
   }
@@ -334,13 +348,13 @@ class _HomeScreenState extends State<HomeScreen> {
         },
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(0, 1),
-              end: Offset.zero,
-            ).animate(CurvedAnimation(
-              parent: animation,
-              curve: Curves.easeOutCubic,
-            )),
+            position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
+                .animate(
+                  CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ),
+                ),
             child: child,
           );
         },
@@ -351,15 +365,13 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showTradeDetails(BuildContext context, Trade trade) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => TradeDetailScreen(trade: trade),
-      ),
+      MaterialPageRoute(builder: (context) => TradeDetailScreen(trade: trade)),
     );
   }
 
   Future<void> _handleMenuAction(BuildContext context, String action) async {
     final trades = context.read<TradeProvider>().allTrades;
-    
+
     if (trades.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -374,7 +386,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       String filePath;
       String fileType;
-      
+
       if (action == 'export_csv') {
         filePath = await ExportService.exportToCSV(trades);
         fileType = 'CSV';
@@ -491,7 +503,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                
+
                 // Trade summary
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -515,23 +527,29 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                 ),
-                
+
                 const SizedBox(height: 16),
                 const Divider(),
-                
+
                 // Actions
                 if (!trade.isClosed)
                   ListTile(
-                    leading: const Icon(Icons.close_rounded, color: AppColors.warning),
+                    leading: const Icon(
+                      Icons.close_rounded,
+                      color: AppColors.warning,
+                    ),
                     title: const Text('Close Trade'),
                     onTap: () {
                       Navigator.pop(context);
                       _showCloseTradeDialog(context, trade);
                     },
                   ),
-                
+
                 ListTile(
-                  leading: const Icon(Icons.edit_rounded, color: AppColors.accent),
+                  leading: const Icon(
+                    Icons.edit_rounded,
+                    color: AppColors.accent,
+                  ),
                   title: const Text('Edit Trade'),
                   onTap: () {
                     Navigator.pop(context);
@@ -542,9 +560,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     );
                   },
                 ),
-                
+
                 ListTile(
-                  leading: const Icon(Icons.delete_rounded, color: AppColors.loss),
+                  leading: const Icon(
+                    Icons.delete_rounded,
+                    color: AppColors.loss,
+                  ),
                   title: const Text('Delete Trade'),
                   onTap: () {
                     Navigator.pop(context);
@@ -578,13 +599,11 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () {
                 context.read<TradeProvider>().deleteTrade(trade.id);
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Trade deleted')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('Trade deleted')));
               },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.loss,
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.loss),
               child: const Text('Delete'),
             ),
           ],
@@ -596,7 +615,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showCloseTradeDialog(BuildContext context, Trade trade) {
     final exitPriceController = TextEditingController();
     DateTime exitDate = DateTime.now();
-    
+
     showDialog(
       context: context,
       builder: (context) {
@@ -609,7 +628,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   TextField(
                     controller: exitPriceController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     decoration: const InputDecoration(
                       labelText: 'Exit Price',
                       prefixText: '\$ ',
@@ -653,7 +674,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       );
                       return;
                     }
-                    
+
                     context.read<TradeProvider>().closeTrade(
                       trade.id,
                       exitPrice,
@@ -707,10 +728,7 @@ class _AnimatedTradeCard extends StatelessWidget {
   final int index;
   final Widget child;
 
-  const _AnimatedTradeCard({
-    required this.index,
-    required this.child,
-  });
+  const _AnimatedTradeCard({required this.index, required this.child});
 
   @override
   Widget build(BuildContext context) {
@@ -757,10 +775,7 @@ class _StatCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              label,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+            Text(label, style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 4),
             Text(
               value,
@@ -802,14 +817,11 @@ class _FilterSheet extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            
+
             // Header
             Row(
               children: [
-                Text(
-                  'Filters',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
+                Text('Filters', style: Theme.of(context).textTheme.titleLarge),
                 const Spacer(),
                 if (provider.hasActiveFilters)
                   TextButton(
@@ -822,12 +834,9 @@ class _FilterSheet extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
-            
+
             // Outcome filter
-            Text(
-              'Outcome',
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
+            Text('Outcome', style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -857,15 +866,12 @@ class _FilterSheet extends StatelessWidget {
                 ),
               ],
             ),
-            
+
             const SizedBox(height: 20),
-            
+
             // Symbol filter
             if (provider.allSymbols.isNotEmpty) ...[
-              Text(
-                'Symbol',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
+              Text('Symbol', style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -876,22 +882,21 @@ class _FilterSheet extends StatelessWidget {
                     selected: provider.symbolFilter == null,
                     onTap: () => provider.setSymbolFilter(null),
                   ),
-                  ...provider.allSymbols.map((symbol) => _FilterChip(
-                    label: symbol,
-                    selected: provider.symbolFilter == symbol,
-                    onTap: () => provider.setSymbolFilter(symbol),
-                  )),
+                  ...provider.allSymbols.map(
+                    (symbol) => _FilterChip(
+                      label: symbol,
+                      selected: provider.symbolFilter == symbol,
+                      onTap: () => provider.setSymbolFilter(symbol),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 20),
             ],
-            
+
             // Tags filter
             if (provider.allTags.isNotEmpty) ...[
-              Text(
-                'Tags',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
+              Text('Tags', style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -902,11 +907,13 @@ class _FilterSheet extends StatelessWidget {
                     selected: provider.tagFilter == null,
                     onTap: () => provider.setTagFilter(null),
                   ),
-                  ...provider.allTags.map((tag) => _FilterChip(
-                    label: '#$tag',
-                    selected: provider.tagFilter == tag,
-                    onTap: () => provider.setTagFilter(tag),
-                  )),
+                  ...provider.allTags.map(
+                    (tag) => _FilterChip(
+                      label: '#$tag',
+                      selected: provider.tagFilter == tag,
+                      onTap: () => provider.setTagFilter(tag),
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -934,7 +941,7 @@ class _FilterChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chipColor = color ?? AppColors.accent;
-    
+
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -961,4 +968,3 @@ class _FilterChip extends StatelessWidget {
     );
   }
 }
-

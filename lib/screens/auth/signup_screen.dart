@@ -31,7 +31,7 @@ class _SignUpScreenState extends State<SignUpScreen>
   @override
   void initState() {
     super.initState();
-    
+
     _fadeController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -40,18 +40,15 @@ class _SignUpScreenState extends State<SignUpScreen>
       parent: _fadeController,
       curve: Curves.easeOut,
     );
-    
+
     _slideController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 600),
     );
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(0, 0.1),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _slideController,
-      curve: Curves.easeOutCubic,
-    ));
+    _slideAnimation =
+        Tween<Offset>(begin: const Offset(0, 0.1), end: Offset.zero).animate(
+          CurvedAnimation(parent: _slideController, curve: Curves.easeOutCubic),
+        );
 
     Future.delayed(const Duration(milliseconds: 100), () {
       _fadeController.forward();
@@ -72,13 +69,13 @@ class _SignUpScreenState extends State<SignUpScreen>
   @override
   Widget build(BuildContext context) {
     final isDesktop = Responsive.isDesktop(context);
-    
+
     return Scaffold(
       body: Stack(
         children: [
           // Animated background
           const _AnimatedBackground(),
-          
+
           // Back button
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
@@ -91,12 +88,10 @@ class _SignUpScreenState extends State<SignUpScreen>
               ),
             ),
           ),
-          
+
           // Content
           SafeArea(
-            child: isDesktop
-                ? _buildDesktopLayout()
-                : _buildMobileLayout(),
+            child: isDesktop ? _buildDesktopLayout() : _buildMobileLayout(),
           ),
         ],
       ),
@@ -107,11 +102,8 @@ class _SignUpScreenState extends State<SignUpScreen>
     return Row(
       children: [
         // Left panel - Branding
-        Expanded(
-          flex: 5,
-          child: _buildBrandingPanel(),
-        ),
-        
+        Expanded(flex: 5, child: _buildBrandingPanel()),
+
         // Right panel - Form
         Expanded(
           flex: 4,
@@ -159,7 +151,7 @@ class _SignUpScreenState extends State<SignUpScreen>
             // Logo
             _buildLogo(size: 100),
             const SizedBox(height: 40),
-            
+
             // Tagline
             Text(
               'Start Your\nTrading Journey',
@@ -169,7 +161,7 @@ class _SignUpScreenState extends State<SignUpScreen>
               ),
             ),
             const SizedBox(height: 20),
-            
+
             Text(
               'Join thousands of traders who use\nour platform to improve their skills.',
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -178,7 +170,7 @@ class _SignUpScreenState extends State<SignUpScreen>
               ),
             ),
             const SizedBox(height: 40),
-            
+
             // Benefits
             ..._buildBenefitsList(),
           ],
@@ -195,39 +187,43 @@ class _SignUpScreenState extends State<SignUpScreen>
       ('✓', 'Paper trading simulator'),
     ];
 
-    return benefits.map((b) => Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        children: [
-          Container(
-            width: 24,
-            height: 24,
-            decoration: BoxDecoration(
-              color: AppColors.profit.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Center(
-              child: Text(
-                b.$1,
-                style: TextStyle(
-                  color: AppColors.profit,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
+    return benefits
+        .map(
+          (b) => Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 24,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    color: AppColors.profit.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Center(
+                    child: Text(
+                      b.$1,
+                      style: TextStyle(
+                        color: AppColors.profit,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: 12),
+                Text(
+                  b.$2,
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 15,
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 12),
-          Text(
-            b.$2,
-            style: TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 15,
-            ),
-          ),
-        ],
-      ),
-    )).toList();
+        )
+        .toList();
   }
 
   Widget _buildHeader() {
@@ -241,16 +237,16 @@ class _SignUpScreenState extends State<SignUpScreen>
             const SizedBox(height: 24),
             Text(
               'Create Account',
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(
               'Start your trading journey today',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: AppColors.textSecondary,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: AppColors.textSecondary),
             ),
           ],
         ),
@@ -305,9 +301,8 @@ class _SignUpScreenState extends State<SignUpScreen>
                   if (Responsive.isDesktop(context)) ...[
                     Text(
                       'Create Account',
-                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: Theme.of(context).textTheme.headlineMedium
+                          ?.copyWith(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -316,7 +311,7 @@ class _SignUpScreenState extends State<SignUpScreen>
                     ),
                     const SizedBox(height: 32),
                   ],
-                  
+
                   // Email field
                   _buildTextField(
                     controller: _emailController,
@@ -327,7 +322,7 @@ class _SignUpScreenState extends State<SignUpScreen>
                     validator: _validateEmail,
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Password field
                   _buildTextField(
                     controller: _passwordController,
@@ -338,14 +333,17 @@ class _SignUpScreenState extends State<SignUpScreen>
                     validator: _validatePassword,
                     suffixIcon: IconButton(
                       icon: Icon(
-                        _obscurePassword ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                        _obscurePassword
+                            ? Icons.visibility_off_rounded
+                            : Icons.visibility_rounded,
                         color: AppColors.textSecondary,
                       ),
-                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                      onPressed: () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
                     ),
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Confirm password field
                   _buildTextField(
                     controller: _confirmPasswordController,
@@ -356,21 +354,26 @@ class _SignUpScreenState extends State<SignUpScreen>
                     validator: _validateConfirmPassword,
                     suffixIcon: IconButton(
                       icon: Icon(
-                        _obscureConfirmPassword ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                        _obscureConfirmPassword
+                            ? Icons.visibility_off_rounded
+                            : Icons.visibility_rounded,
                         color: AppColors.textSecondary,
                       ),
-                      onPressed: () => setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
+                      onPressed: () => setState(
+                        () =>
+                            _obscureConfirmPassword = !_obscureConfirmPassword,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 24),
-                  
+
                   // Password strength indicator
                   _buildPasswordStrength(),
                   const SizedBox(height: 24),
-                  
+
                   // Error message
                   if (auth.error != null) _buildErrorMessage(auth.error!),
-                  
+
                   // Sign up button
                   _buildPrimaryButton(
                     label: 'Create Account',
@@ -378,7 +381,7 @@ class _SignUpScreenState extends State<SignUpScreen>
                     onPressed: _handleSignUp,
                   ),
                   const SizedBox(height: 24),
-                  
+
                   // Terms
                   Text(
                     'By creating an account, you agree to our Terms of Service and Privacy Policy.',
@@ -389,7 +392,7 @@ class _SignUpScreenState extends State<SignUpScreen>
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
-                  
+
                   // Sign in link
                   _buildSignInLink(),
                 ],
@@ -416,10 +419,7 @@ class _SignUpScreenState extends State<SignUpScreen>
       children: [
         Text(
           label,
-          style: const TextStyle(
-            fontWeight: FontWeight.w600,
-            fontSize: 13,
-          ),
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
         ),
         const SizedBox(height: 8),
         TextFormField(
@@ -432,7 +432,10 @@ class _SignUpScreenState extends State<SignUpScreen>
             hintText: hint,
             prefixIcon: Icon(icon, size: 20),
             suffixIcon: suffixIcon,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 16,
+            ),
           ),
         ),
       ],
@@ -442,13 +445,13 @@ class _SignUpScreenState extends State<SignUpScreen>
   Widget _buildPasswordStrength() {
     final password = _passwordController.text;
     int strength = 0;
-    
+
     if (password.length >= 6) strength++;
     if (password.length >= 8) strength++;
     if (RegExp(r'[A-Z]').hasMatch(password)) strength++;
     if (RegExp(r'[0-9]').hasMatch(password)) strength++;
     if (RegExp(r'[!@#$%^&*(),.?":{}|<>]').hasMatch(password)) strength++;
-    
+
     final colors = [
       AppColors.loss,
       AppColors.warning,
@@ -456,9 +459,9 @@ class _SignUpScreenState extends State<SignUpScreen>
       AppColors.profit,
       AppColors.profit,
     ];
-    
+
     final labels = ['Weak', 'Fair', 'Good', 'Strong', 'Very Strong'];
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -483,7 +486,9 @@ class _SignUpScreenState extends State<SignUpScreen>
           Text(
             'Password strength: ${strength > 0 ? labels[strength - 1] : "Too short"}',
             style: TextStyle(
-              color: strength > 0 ? colors[strength - 1] : AppColors.textTertiary,
+              color: strength > 0
+                  ? colors[strength - 1]
+                  : AppColors.textTertiary,
               fontSize: 12,
             ),
           ),
@@ -600,11 +605,18 @@ class _SignUpScreenState extends State<SignUpScreen>
 
   Future<void> _handleSignUp() async {
     if (!_formKey.currentState!.validate()) return;
-    
-    await context.read<AuthProvider>().signUpWithEmail(
+
+    final success = await context.read<AuthProvider>().signUpWithEmail(
       email: _emailController.text.trim(),
       password: _passwordController.text,
     );
+
+    // If signup was successful, pop back to auth gate which will show main app
+    if (success && mounted) {
+      // Pop all the way back to the auth gate - it will automatically show MainShell
+      // because the auth state is now authenticated
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
   }
 }
 
@@ -657,20 +669,20 @@ class _GradientPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint();
-    
+
     paint.color = AppColors.background;
     canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), paint);
-    
+
     final center1 = Offset(
       size.width * (0.7 + 0.1 * math.sin(animationValue * 2 * math.pi)),
       size.height * (0.3 + 0.1 * math.cos(animationValue * 2 * math.pi)),
     );
-    
+
     final center2 = Offset(
       size.width * (0.3 + 0.1 * math.cos(animationValue * 2 * math.pi)),
       size.height * (0.7 + 0.1 * math.sin(animationValue * 2 * math.pi)),
     );
-    
+
     paint.shader = RadialGradient(
       colors: [
         AppColors.accent.withOpacity(0.12),
@@ -678,7 +690,7 @@ class _GradientPainter extends CustomPainter {
       ],
     ).createShader(Rect.fromCircle(center: center1, radius: size.width * 0.4));
     canvas.drawCircle(center1, size.width * 0.4, paint);
-    
+
     paint.shader = RadialGradient(
       colors: [
         const Color(0xFF00A5FF).withOpacity(0.08),

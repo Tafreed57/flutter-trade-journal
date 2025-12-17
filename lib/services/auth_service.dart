@@ -99,11 +99,18 @@ class AuthService {
 
       final userCredential = await _auth.signInWithCredential(credential);
       
-      // Check if this is a new user
-      if (userCredential.additionalUserInfo?.isNewUser ?? false) {
-        await _createUserDocument(userCredential.user, 'google');
-      } else {
-        await _updateLastLogin(userCredential.user);
+      // User is now authenticated in Firebase Auth.
+      // Creating/updating the Firestore document is secondary - don't let it
+      // break the auth flow if it fails.
+      try {
+        if (userCredential.additionalUserInfo?.isNewUser ?? false) {
+          await _createUserDocument(userCredential.user, 'google');
+        } else {
+          await _updateLastLogin(userCredential.user);
+        }
+      } catch (firestoreError) {
+        // Log but don't fail - user is already authenticated
+        Log.w('Failed to update user document, will retry later: $firestoreError');
       }
 
       Log.i('User signed in with Google: ${userCredential.user?.email}');

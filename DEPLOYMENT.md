@@ -7,8 +7,10 @@ This document covers building, testing, and deploying the Trading Journal app.
 - [Environment Setup](#environment-setup)
 - [Building for Platforms](#building-for-platforms)
 - [Testing](#testing)
+- [Mobile Testing](#mobile-testing)
 - [Database Migrations](#database-migrations)
 - [Release Checklist](#release-checklist)
+- [Recent Changes](#recent-changes)
 
 ---
 
@@ -352,6 +354,39 @@ flutter test test/services/analytics_service_test.dart
 
 ---
 
+## Mobile Testing
+
+The app now has a responsive UI that adapts to mobile screen sizes. For comprehensive mobile testing, refer to `MOBILE_QA.md`.
+
+### Quick Mobile Verification
+
+```bash
+# Web with Chrome mobile emulator
+flutter run -d chrome --web-renderer html
+
+# Android device
+flutter run -d <device_id>
+
+# List available devices
+flutter devices
+```
+
+### Key Mobile Test Areas
+
+1. **Google Sign-Up Auto-Login** - New users signing up via Google should immediately land in the app authenticated
+2. **Chart UI Controls** - Drawing tools, timeframes, and stats should be accessible on small screens
+3. **Position Tool Settings** - Tapping Long/Short shows a settings sheet for RR presets
+4. **SL/TP Sync** - Position tool parameters sync bi-directionally with the trading panel
+
+### Mobile Breakpoints
+
+The app uses these responsive breakpoints:
+- **Mobile:** < 600dp width
+- **Tablet:** 600dp - 900dp width  
+- **Desktop:** > 900dp width
+
+---
+
 ## Database Migrations
 
 The app uses Hive for local storage. Data is stored in these boxes:
@@ -449,4 +484,85 @@ flutter build web
 ### Hive Box Not Opening
 - May need to clear corrupt data
 - Check for mismatched type adapters after model changes
+
+---
+
+## Recent Changes
+
+### December 2024 Update
+
+#### Phase 1: Auth Auto-Login Fix (Google + Email)
+- **Issue:** New users signing up (Google or Email) were not automatically signed in
+- **Fix:** 
+  - Modified `auth_service.dart` and `auth_provider.dart` to ensure immediate authentication state after successful OAuth/signup
+  - Modified `signup_screen.dart` to navigate to main app after successful account creation
+- **Files:** `lib/services/auth_service.dart`, `lib/state/auth_provider.dart`, `lib/screens/auth/signup_screen.dart`
+
+#### Phase 2: Mobile UI Overhaul
+- **Issue:** Chart UI controls overflowed and were unusable on mobile screens
+- **Fix:** Added responsive layout with mobile-specific components
+- **Changes:**
+  - `_MobileDrawingToolsMenu` - Popup menu for drawing tools on mobile
+  - Horizontally scrollable OHLC stats and timeframe buttons
+  - Compact trading panel layout for mobile
+- **Files:** `lib/screens/chart_screen.dart`
+
+#### Phase 3a: Position Tool RR Presets
+- **Feature:** Users can now set Risk:Reward parameters before placing a position tool
+- **Changes:**
+  - `_PositionToolSettingsSheet` - Bottom sheet for configuring SL%, R:R ratio, and quantity
+  - Settings are applied when the position tool is placed on the chart
+- **Files:** `lib/screens/chart_screen.dart`, `lib/state/chart_drawing_provider.dart`
+
+#### Phase 3b: SL/TP Bi-directional Sync
+- **Feature:** Position tool SL/TP values sync with the trading panel
+- **Changes:**
+  - Selecting a position tool populates SL% and TP% in the Order panel
+  - Editing SL/TP in the Order panel updates the position tool on the chart
+  - Prevents circular update loops
+- **Files:** `lib/screens/chart_screen.dart`
+
+#### New Documentation
+- **MOBILE_QA.md** - Comprehensive mobile testing checklist
+
+---
+
+## Documentation Index
+
+| Document | Purpose |
+|----------|---------|
+| `README.md` | Project overview and setup |
+| `DEPLOYMENT.md` | Build and deployment instructions (this file) |
+| `RELEASE_REPORT.md` | Release readiness audit |
+| `ENV.md` | Environment variables |
+| `MOBILE_QA.md` | Mobile testing checklist |
+| `FINAL_PROJECT_REPORT.md` | Architecture and design documentation |
+
+---
+
+## Current Deployment Status
+
+### Web (Firebase Hosting)
+- **URL:** https://trading-app-68902.web.app
+- **Last Deployed:** December 17, 2024
+- **Version:** 1.0.1+2 (with mobile UI fixes)
+
+### Android APK
+- **Location:** `build/app/outputs/flutter-apk/app-release.apk`
+- **Size:** ~56 MB
+- **Last Built:** December 17, 2024
+
+### Deployment Commands Used
+```powershell
+# Clean and rebuild
+flutter clean
+flutter pub get
+
+# Build and deploy web
+flutter build web --release
+firebase deploy --only hosting
+
+# Build Android APK
+flutter build apk --release
+```
 

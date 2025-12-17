@@ -147,6 +147,23 @@ class AuthProvider extends ChangeNotifier {
 
     try {
       await operation();
+      
+      // After a successful auth operation, sync state with Firebase's current user.
+      // This handles race conditions where the authStateChanges listener might not
+      // have fired yet, or might have been skipped due to UID matching.
+      final currentUser = _authService.currentUser;
+      if (currentUser != null && _state != AuthState.authenticated) {
+        _user = currentUser;
+        _state = AuthState.authenticated;
+        Log.i('Auth operation successful, user: ${currentUser.email}');
+        notifyListeners();
+      } else if (currentUser == null && _state != AuthState.unauthenticated) {
+        // Sign out completed
+        _user = null;
+        _state = AuthState.unauthenticated;
+        notifyListeners();
+      }
+      
       return true;
     } on AuthException catch (e) {
       _error = e.message;

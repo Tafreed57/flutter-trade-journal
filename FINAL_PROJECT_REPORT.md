@@ -884,7 +884,60 @@ The application is **production-ready** with:
 
 ---
 
-# Appendix B: Dependencies
+# Appendix B: Post-Deployment Updates (December 2024)
+
+## B.1 Google Sign-Up Auto-Login Fix
+
+**Problem:** New users signing up via Google OAuth were not immediately authenticated in the app.
+
+**Root Cause:** The `AuthProvider` relied solely on Firebase's `authStateChanges` listener, which might not trigger when the user is already technically authenticated.
+
+**Solution:**
+- Modified `auth_service.dart` to always ensure user document exists after Google sign-in
+- Modified `auth_provider.dart` to explicitly set authenticated state after successful operations
+
+## B.2 Mobile Responsive UI
+
+**Problem:** Chart UI controls overflowed on mobile screens, making the app unusable.
+
+**Solution:** Implemented responsive layout with mobile-specific components:
+- `_MobileDrawingToolsMenu`: Popup menu replacing the desktop toolbar on mobile
+- Horizontally scrollable OHLC stats row
+- Horizontally scrollable timeframe buttons
+- Compact trading panel layout
+
+**Breakpoints:**
+- Mobile: < 600dp width
+- Tablet: 600-900dp width
+- Desktop: > 900dp width
+
+## B.3 Position Tool RR Presets
+
+**Feature:** Users can configure Risk:Reward parameters before placing a position tool.
+
+**Implementation:**
+- `_PositionToolSettingsSheet`: Bottom sheet with SL%, R:R ratio, and quantity presets
+- Provider stores presets and applies them when tool is placed
+- Summary shows calculated SL%, TP%, and effective R:R
+
+## B.4 SL/TP Bi-directional Sync
+
+**Feature:** Position tool parameters sync with the trading panel.
+
+**Implementation:**
+- `_syncFromPositionTool()`: Syncs selected tool values to panel inputs
+- `_syncToPositionTool()`: Syncs panel changes back to the tool
+- Uses `_isSyncingFromTool` flag to prevent circular update loops
+
+## B.5 New Documentation
+
+| Document | Purpose |
+|----------|---------|
+| `MOBILE_QA.md` | Comprehensive mobile testing checklist |
+
+---
+
+# Appendix C: Dependencies
 
 ```yaml
 dependencies:
@@ -907,4 +960,5 @@ dependencies:
 ---
 
 **End of Report**
+
 

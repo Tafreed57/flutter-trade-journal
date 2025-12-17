@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../core/logger.dart';
+import '../core/debug_trace.dart';
+import '../main.dart' show isFirebaseAvailable;
 import '../models/live_price.dart';
 import '../models/paper_trading.dart';
 import '../models/trade.dart';
 import '../services/paper_trading_engine.dart';
 import '../services/paper_trading_repository.dart';
 import '../services/trade_repository.dart';
+import '../services/trade_sync_service.dart';
 
 /// State management for paper trading
 ///
@@ -18,6 +21,7 @@ class PaperTradingProvider extends ChangeNotifier {
   final PaperTradingEngine _engine;
   final TradeRepository _tradeRepository;
   final PaperTradingRepository _paperRepository;
+  final TradeSyncService _tradeSyncService;
 
   // Current prices for P&L calculation
   final Map<String, double> _currentPrices = {};
@@ -28,82 +32,97 @@ class PaperTradingProvider extends ChangeNotifier {
   double? _takeProfitPercent;
   String? _error;
   bool _isInitialized = false;
-  
+
   /// Whether the provider has been initialized
   bool get isInitialized => _isInitialized;
-  
+
   /// Current user ID for multi-user support
   String? _userId;
   String? get userId => _userId;
-  
+
   /// Callback to notify when a position is closed and its tool should be removed
   /// This is set by the chart screen or whoever needs to clean up drawings
   void Function(String toolId)? onToolShouldBeRemoved;
 
-  PaperTradingProvider(this._tradeRepository) 
-      : _engine = PaperTradingEngine(),
-        _paperRepository = PaperTradingRepository() {
+  PaperTradingProvider(this._tradeRepository, {TradeSyncService? syncService})
+    : _engine = PaperTradingEngine(),
+      _paperRepository = PaperTradingRepository(),
+      _tradeSyncService = syncService ?? TradeSyncService() {
     // Set up callback to save closed trades to journal
     _engine.onTradeClosed = _onTradeClosed;
-    
+
     // Set up callback to clean up position tools when positions close
     _engine.onPositionClosed = _onPositionClosed;
   }
-  
+
   /// Initialize the provider - load state from storage
+  /// Can be called again with a different userId to reinitialize for a new user
   Future<void> init({String? userId}) async {
-    if (_isInitialized) return;
-    
+    // Skip if already initialized for the same user
+    if (_isInitialized && _userId == userId) return;
+
     try {
+      // Clear existing state when switching users
+      if (_isInitialized && _userId != userId) {
+        _engine.resetAccount();
+        _currentPrices.clear();
+        Log.i('PaperTradingProvider: Cleared state for user switch');
+      }
+
       _userId = userId;
       await _paperRepository.init();
-      
+
       // Load saved account
       final savedAccount = _paperRepository.getAccount(userId: userId);
       if (savedAccount != null) {
         _engine.restoreAccount(savedAccount);
-        Log.trade('Restored paper account: \$${savedAccount.balance.toStringAsFixed(2)}');
+        Log.trade(
+          'Restored paper account: \$${savedAccount.balance.toStringAsFixed(2)}',
+        );
+      } else {
+        // Reset to default account for new user
+        _engine.resetAccount();
       }
-      
+
       // Load saved positions
       final savedPositions = _paperRepository.getOpenPositions(userId: userId);
       if (savedPositions.isNotEmpty) {
         _engine.restorePositions(savedPositions);
         Log.trade('Restored ${savedPositions.length} open positions');
       }
-      
+
       _isInitialized = true;
       notifyListeners();
     } catch (e) {
       Log.e('Failed to initialize PaperTradingProvider', e);
     }
   }
-  
+
   /// Save current state to storage
   Future<void> _saveState() async {
     if (!_paperRepository.isInitialized) return;
-    
+
     try {
       // Save account
       await _paperRepository.saveAccount(_engine.account, userId: _userId);
-      
+
       // Save open positions
       await _paperRepository.savePositions(_engine.openPositions.toList());
-      
+
       // Also save closed positions for history
       await _paperRepository.savePositions(_engine.closedPositions.toList());
     } catch (e) {
       Log.e('Failed to save paper trading state', e);
     }
   }
-  
+
   /// Handle position closed - notify to remove position tool from chart and save state
   void _onPositionClosed(String positionId, String? linkedToolId) {
     if (linkedToolId != null) {
       Log.trade('Position closed, removing tool: $linkedToolId');
       onToolShouldBeRemoved?.call(linkedToolId);
     }
-    
+
     // Save state after position close
     _saveState();
   }
@@ -143,21 +162,21 @@ class PaperTradingProvider extends ChangeNotifier {
   // ==================== PRICE UPDATES ====================
 
   /// Update price for a symbol (call this on live price updates)
-  void updatePrice(LivePrice price) {
+  Future<void> updatePrice(LivePrice price) async {
     _currentPrices[price.symbol] = price.price;
 
     // Check SL/TP triggers
-    _engine.checkStopLossTakeProfit(price.symbol, price.price);
+    await _engine.checkStopLossTakeProfit(price.symbol, price.price);
 
     notifyListeners();
   }
 
   /// Batch update prices
-  void updatePrices(Map<String, double> prices) {
+  Future<void> updatePrices(Map<String, double> prices) async {
     _currentPrices.addAll(prices);
 
     for (final entry in prices.entries) {
-      _engine.checkStopLossTakeProfit(entry.key, entry.value);
+      await _engine.checkStopLossTakeProfit(entry.key, entry.value);
     }
 
     notifyListeners();
@@ -166,7 +185,7 @@ class PaperTradingProvider extends ChangeNotifier {
   // ==================== ORDER PLACEMENT ====================
 
   /// Place a buy order
-  bool buy(String symbol, double currentPrice) {
+  Future<bool> buy(String symbol, double currentPrice) async {
     try {
       _error = null;
 
@@ -181,13 +200,14 @@ class PaperTradingProvider extends ChangeNotifier {
         takeProfit = currentPrice * (1 + _takeProfitPercent! / 100);
       }
 
-      _engine.placeMarketOrder(
+      await _engine.placeMarketOrder(
         symbol: symbol,
         side: OrderSide.buy,
         quantity: _orderQuantity,
         currentPrice: currentPrice,
         stopLoss: stopLoss,
         takeProfit: takeProfit,
+        userId: _userId,
       );
 
       _currentPrices[symbol] = currentPrice;
@@ -202,7 +222,7 @@ class PaperTradingProvider extends ChangeNotifier {
   }
 
   /// Place a sell order
-  bool sell(String symbol, double currentPrice) {
+  Future<bool> sell(String symbol, double currentPrice) async {
     try {
       _error = null;
 
@@ -217,13 +237,14 @@ class PaperTradingProvider extends ChangeNotifier {
         takeProfit = currentPrice * (1 - _takeProfitPercent! / 100);
       }
 
-      _engine.placeMarketOrder(
+      await _engine.placeMarketOrder(
         symbol: symbol,
         side: OrderSide.sell,
         quantity: _orderQuantity,
         currentPrice: currentPrice,
         stopLoss: stopLoss,
         takeProfit: takeProfit,
+        userId: _userId,
       );
 
       _currentPrices[symbol] = currentPrice;
@@ -238,7 +259,8 @@ class PaperTradingProvider extends ChangeNotifier {
   }
 
   /// Close a specific position
-  bool closePosition(String positionId) {
+  Future<bool> closePosition(String positionId) async {
+    JournalDebug.chartTrade('CLOSE_POSITION_START', positionId: positionId);
     try {
       _error = null;
 
@@ -247,24 +269,35 @@ class PaperTradingProvider extends ChangeNotifier {
 
       if (currentPrice == null) {
         _error = 'No current price available';
+        JournalDebug.chartTrade(
+          'CLOSE_POSITION_ERROR',
+          positionId: positionId,
+          error: 'No current price',
+        );
         notifyListeners();
         return false;
       }
 
-      _engine.closePosition(positionId, currentPrice);
+      await _engine.closePosition(positionId, currentPrice);
       // State is saved in _onPositionClosed callback
+      JournalDebug.chartTrade('CLOSE_POSITION_SUCCESS', positionId: positionId);
       notifyListeners();
       return true;
     } catch (e) {
       _error = e.toString();
+      JournalDebug.chartTrade(
+        'CLOSE_POSITION_ERROR',
+        positionId: positionId,
+        error: e.toString(),
+      );
       notifyListeners();
       return false;
     }
   }
 
   /// Close all open positions
-  void closeAllPositions() {
-    _engine.closeAllPositions(_currentPrices);
+  Future<void> closeAllPositions() async {
+    await _engine.closeAllPositions(_currentPrices);
     // State is saved in _onPositionClosed callback for each position
     notifyListeners();
   }
@@ -307,25 +340,98 @@ class PaperTradingProvider extends ChangeNotifier {
   Future<void> resetAccount({double? newBalance}) async {
     _engine.resetAccount(newBalance: newBalance);
     _currentPrices.clear();
-    
+
     // Clear persisted state
     if (_paperRepository.isInitialized) {
       await _paperRepository.deleteAccount(userId: _userId);
       await _paperRepository.clearPositions(userId: _userId);
     }
-    
+
     notifyListeners();
   }
 
   // ==================== JOURNAL INTEGRATION ====================
 
-  /// Called when a position is closed - saves to journal
+  /// Called when a position is closed - saves to journal (local + cloud)
+  /// IMPORTANT: This saves to Firestore SYNCHRONOUSLY to ensure the trade
+  /// is available when refresh() is called immediately after.
   Future<void> _onTradeClosed(Trade trade) async {
+    JournalDebug.start('PaperTrading._onTradeClosed');
+    JournalDebug.chartTrade(
+      'CLOSE_CALLBACK_START',
+      symbol: trade.symbol,
+      tradeId: trade.id,
+      userId: trade.userId,
+      toolId: trade.linkedToolId,
+    );
+
+    // Reject trades without userId to prevent data leakage
+    if (trade.userId == null) {
+      JournalDebug.chartTrade(
+        'CLOSE_REJECTED',
+        symbol: trade.symbol,
+        error: 'No userId on trade',
+      );
+      JournalDebug.end(
+        'PaperTrading._onTradeClosed',
+        details: 'REJECTED - no userId',
+      );
+      return;
+    }
+
     try {
+      // Save to local storage first
+      JournalDebug.chartTrade(
+        'SAVING_TO_HIVE',
+        tradeId: trade.id,
+        symbol: trade.symbol,
+      );
       await _tradeRepository.addTrade(trade);
-      Log.trade('Paper trade saved to journal: ${trade.symbol}');
+      JournalDebug.chartTrade(
+        'SAVED_TO_HIVE',
+        tradeId: trade.id,
+        symbol: trade.symbol,
+      );
+
+      // Save to Firestore SYNCHRONOUSLY (await it) so refresh() sees it
+      if (isFirebaseAvailable) {
+        JournalDebug.chartTrade(
+          'SAVING_TO_FIRESTORE',
+          tradeId: trade.id,
+          userId: trade.userId,
+        );
+        final success = await _tradeSyncService.saveTrade(trade);
+        if (success) {
+          JournalDebug.chartTrade('SAVED_TO_FIRESTORE', tradeId: trade.id);
+        } else {
+          JournalDebug.chartTrade(
+            'FIRESTORE_SAVE_FAILED',
+            tradeId: trade.id,
+            error: 'saveTrade returned false',
+          );
+        }
+      } else {
+        JournalDebug.chartTrade(
+          'FIRESTORE_SKIPPED',
+          tradeId: trade.id,
+          error: 'Firebase not available',
+        );
+      }
+
+      JournalDebug.end('PaperTrading._onTradeClosed', details: 'SUCCESS');
+      JournalDebug.chartTrade(
+        'CLOSE_CALLBACK_COMPLETE',
+        tradeId: trade.id,
+        symbol: trade.symbol,
+      );
     } catch (e) {
-      Log.e('Failed to save paper trade to journal', e);
+      JournalDebug.end('PaperTrading._onTradeClosed', details: 'FAILED');
+      JournalDebug.chartTrade(
+        'CLOSE_CALLBACK_ERROR',
+        tradeId: trade.id,
+        symbol: trade.symbol,
+        error: e.toString(),
+      );
     }
   }
 
@@ -347,13 +453,13 @@ class PaperTradingProvider extends ChangeNotifier {
     _error = null;
     notifyListeners();
   }
-  
+
   // ==================== POSITION TOOL INTEGRATION ====================
-  
+
   /// Create a position from a position tool
   /// Returns the position ID if successful
   /// [toolId] - The ID of the PositionToolDrawing that created this position
-  String? openPositionFromTool({
+  Future<String?> openPositionFromTool({
     required String symbol,
     required bool isLong,
     required double entryPrice,
@@ -361,11 +467,17 @@ class PaperTradingProvider extends ChangeNotifier {
     required double stopLoss,
     required double takeProfit,
     String? toolId,
-  }) {
+  }) async {
+    JournalDebug.chartTrade(
+      'OPEN_FROM_TOOL_START',
+      symbol: symbol,
+      toolId: toolId,
+      userId: _userId,
+    );
     try {
       _error = null;
-      
-      _engine.placeMarketOrder(
+
+      await _engine.placeMarketOrder(
         symbol: symbol,
         side: isLong ? OrderSide.buy : OrderSide.sell,
         quantity: quantity,
@@ -373,22 +485,35 @@ class PaperTradingProvider extends ChangeNotifier {
         stopLoss: stopLoss,
         takeProfit: takeProfit,
         linkedToolId: toolId,
+        userId: _userId,
       );
-      
+
       _currentPrices[symbol] = entryPrice;
       _saveState(); // Persist after trade
       notifyListeners();
-      
+
       // Return the newly created position ID
       final position = _engine.getPositionForSymbol(symbol);
+      JournalDebug.chartTrade(
+        'OPEN_FROM_TOOL_SUCCESS',
+        symbol: symbol,
+        toolId: toolId,
+        positionId: position?.id,
+      );
       return position?.id;
     } catch (e) {
       _error = e.toString();
+      JournalDebug.chartTrade(
+        'OPEN_FROM_TOOL_ERROR',
+        symbol: symbol,
+        toolId: toolId,
+        error: e.toString(),
+      );
       notifyListeners();
       return null;
     }
   }
-  
+
   /// Get position by ID
   PaperPosition? getPositionById(String positionId) {
     try {
@@ -397,15 +522,12 @@ class PaperTradingProvider extends ChangeNotifier {
       return null;
     }
   }
-  
+
   /// Check if a position was closed (returns exit price and PnL if closed)
   ({double exitPrice, double pnl})? getClosedPositionResult(String positionId) {
     try {
       final closed = closedPositions.firstWhere((p) => p.id == positionId);
-      return (
-        exitPrice: closed.exitPrice ?? 0,
-        pnl: closed.realizedPnL ?? 0,
-      );
+      return (exitPrice: closed.exitPrice ?? 0, pnl: closed.realizedPnL ?? 0);
     } catch (_) {
       return null;
     }

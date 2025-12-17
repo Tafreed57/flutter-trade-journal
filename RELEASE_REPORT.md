@@ -1,14 +1,27 @@
 # Release Report - Trading Journal App
 
 **Generated:** December 17, 2025  
-**Version:** 1.0.0+1  
-**Flutter SDK:** ^3.10.1
+**Version:** 1.0.1+2  
+**Flutter SDK:** ^3.10.1  
+**Last Updated:** December 2024 (Post-deployment fixes)
 
 ---
 
 ## Executive Summary
 
 The Trading Journal app has been audited and prepared for multi-platform deployment. The app is ready for release on **Web**, **Android**, and **Windows** platforms. macOS and Linux builds are also configured but require platform-specific testing.
+
+### December 2024 Post-Deployment Updates
+
+This release includes critical bug fixes and feature enhancements:
+
+| Change | Type | Impact |
+|--------|------|--------|
+| Google sign-up auto-login fix | Bug Fix | New users now immediately authenticated after OAuth |
+| Mobile-responsive chart UI | Enhancement | Full chart functionality on mobile screens |
+| Position tool RR presets | Feature | Configure risk parameters before placing tools |
+| SL/TP bi-directional sync | Feature | Trading panel and chart tools stay synchronized |
+| Mobile QA checklist | Documentation | Comprehensive testing guide for mobile |
 
 ---
 
@@ -69,7 +82,7 @@ The Trading Journal app has been audited and prepared for multi-platform deploym
 
 ### Android ✅
 
-**Status:** Ready for signing and submission
+**Status:** ✅ BUILT (APK ready for distribution)
 
 | Item | Status |
 |------|--------|
@@ -77,25 +90,30 @@ The Trading Journal app has been audited and prepared for multi-platform deploym
 | Signing config | ✅ Template ready |
 | ProGuard rules | ✅ Created |
 | Multidex enabled | ✅ |
-| Firebase plugin | ✅ Conditional (requires google-services.json) |
+| Firebase plugin | ✅ Configured |
+| **APK Built** | ✅ December 17, 2024 |
+| **APK Size** | ~56 MB |
 
-**Required for first build:**
-1. Download `google-services.json` from Firebase Console
-2. Create `android/key.properties` with signing credentials
-3. Generate upload keystore
+**APK Location:** `build/app/outputs/flutter-apk/app-release.apk`
 
-**Build command:**
+**Build commands:**
 ```bash
+# APK for direct distribution
+flutter build apk --release
+
+# AAB for Play Store
 flutter build appbundle --release
 ```
 
-**Output:** `build/app/outputs/bundle/release/app-release.aab`
+**Output:** 
+- APK: `build/app/outputs/flutter-apk/app-release.apk`
+- AAB: `build/app/outputs/bundle/release/app-release.aab`
 
 ---
 
 ### Web ✅
 
-**Status:** Ready for deployment
+**Status:** ✅ DEPLOYED
 
 | Item | Status |
 |------|--------|
@@ -103,16 +121,19 @@ flutter build appbundle --release
 | PWA manifest | ✅ Updated with app branding |
 | Firebase Hosting config | ✅ firebase.json configured |
 | CORS headers | ✅ Configured in firebase.json |
+| **Live URL** | ✅ https://trading-app-68902.web.app |
+| **Last Deployed** | ✅ December 17, 2024 |
 
 **Build command:**
 ```bash
-flutter build web --release --web-renderer canvaskit
+flutter build web --release
+firebase deploy --only hosting
 ```
 
 **Output:** `build/web/`
 
 **Deployment options:**
-- Firebase Hosting (recommended)
+- Firebase Hosting (current) ✅
 - Cloudflare Pages
 - Vercel
 - Any static hosting
@@ -183,6 +204,11 @@ flutter build windows --release
 | Trade Close | Close a paper position | Tool removed, journal entry created |
 | Persistence | Full restart app | All data persists |
 | Auth Flow | Sign in with Google | Auth completes, user data loads |
+| Google Sign-Up | New user OAuth | Immediately authenticated (no re-login) |
+| Mobile Drawing Menu | Tap pencil icon on mobile | Popup menu with all tools |
+| Position Tool Settings | Tap Long/Short on mobile | Settings sheet appears |
+| RR Preset Apply | Set 2% SL, 1:2 RR, place tool | Tool has correct SL/TP levels |
+| SL/TP Sync | Select tool, edit SL in panel | Chart tool updates in real-time |
 
 ### Web-Specific Tests
 
@@ -201,14 +227,17 @@ flutter build windows --release
 
 ## Files Modified
 
-### New Files
+### New Files (Initial Release)
 - `ENV.md` - Environment variable documentation
 - `RELEASE_REPORT.md` - This report
 - `firebase.json` - Firebase Hosting configuration
 - `test/smoke_test.dart` - Release verification tests
 - `android/app/proguard-rules.pro` - ProGuard configuration
 
-### Modified Files
+### New Files (December 2024 Update)
+- `MOBILE_QA.md` - Mobile testing checklist
+
+### Modified Files (Initial Release)
 - `lib/main.dart` - Added global error handlers
 - `lib/core/env_config.dart` - Added dart-define support
 - `lib/screens/chart_screen.dart` - Fixed overflow issue
@@ -220,6 +249,13 @@ flutter build windows --release
 - `windows/runner/Runner.rc` - App metadata
 - `DEPLOYMENT.md` - Comprehensive deployment instructions
 - `.gitignore` - Added signing files
+
+### Modified Files (December 2024 Update)
+- `lib/services/auth_service.dart` - Fixed Google sign-up auto-login
+- `lib/state/auth_provider.dart` - Explicit auth state after successful operations
+- `lib/screens/chart_screen.dart` - Mobile responsive UI, position tool settings sheet, SL/TP sync
+- `lib/state/chart_drawing_provider.dart` - RR preset support
+- `DEPLOYMENT.md` - Added mobile testing section, recent changes documentation
 
 ---
 
@@ -289,4 +325,6 @@ For deployment issues, check:
 - `DEPLOYMENT.md` - Full deployment guide
 - `ENV.md` - Environment configuration
 - `README.md` - Project setup
+- `MOBILE_QA.md` - Mobile testing checklist
+- `FINAL_PROJECT_REPORT.md` - Architecture documentation
 
