@@ -85,8 +85,18 @@ class _ChartScreenState extends State<ChartScreen> {
       body: SafeArea(
         child: Consumer<MarketDataProvider>(
           builder: (context, provider, _) {
-            if (!provider.isConfigured) {
-              return _buildApiNotConfigured();
+            // Show loading while initializing
+            if (!provider.isInitialized) {
+              return const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(color: AppColors.accent),
+                    SizedBox(height: 16),
+                    Text('Loading market data...', style: TextStyle(color: AppColors.textSecondary)),
+                  ],
+                ),
+              );
             }
             
             // Sync price to paper trading provider

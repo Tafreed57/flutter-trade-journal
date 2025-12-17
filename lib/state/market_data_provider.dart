@@ -58,7 +58,9 @@ class MarketDataProvider extends ChangeNotifier {
   String? get error => _error;
   bool get hasError => _error != null;
   bool get isConnected => _isConnected;
-  bool get isConfigured => EnvConfig.isFinnhubConfigured || _useMockData;
+  /// Returns true if the provider is ready to show data
+  /// After init() is called, this will always be true (uses mock data if no API key)
+  bool get isConfigured => _initialized || EnvConfig.isFinnhubConfigured || _useMockData;
   bool get isMockMode => _useMockData;
   bool get isInitialized => _initialized;
   
