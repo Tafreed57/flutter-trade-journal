@@ -9,7 +9,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:938293786158:android:6e107d239f7e0e834b51bf",
         "android_client_info": {
-          "package_name": "trading.journal"
+          "package_name": "com.example.trade_journal_app"
         }
       },
       "oauth_client": [
