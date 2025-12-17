@@ -61,3 +61,4 @@ release-keystore.jks
 env.json
 .env.production
 .env.staging
+tool/release.env
