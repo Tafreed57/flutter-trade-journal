@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:ui';
+
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -28,59 +32,93 @@ bool _firebaseAvailable = false;
 bool get isFirebaseAvailable => _firebaseAvailable;
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  // Set up global error handlers for release builds
+  _setupErrorHandlers();
+  
+  runZonedGuarded(() async {
+    WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
+    // Initialize Firebase
+    try {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+      _firebaseAvailable = true;
+      Log.i('Firebase initialized successfully');
+    } catch (e) {
+      Log.w('Firebase initialization failed - running offline: $e');
+      _firebaseAvailable = false;
+    }
+
+    // Load environment variables (API keys, etc.)
+    await EnvConfig.load();
+
+    // Initialize Hive for local storage
+    await Hive.initFlutter();
+
+    // Register Hive type adapters - Trade models
+    Hive.registerAdapter(TradeSideAdapter());
+    Hive.registerAdapter(TradeOutcomeAdapter());
+    Hive.registerAdapter(TradeAdapter());
+
+    // Register Hive type adapters - Paper trading models
+    Hive.registerAdapter(PaperAccountAdapter());
+    Hive.registerAdapter(OrderSideAdapter());
+    Hive.registerAdapter(OrderTypeAdapter());
+    Hive.registerAdapter(OrderStatusAdapter());
+
+    // Initialize MarketDataEngine (for chart data persistence)
+    await MarketDataEngine.instance.init();
+    Hive.registerAdapter(PaperOrderAdapter());
+    Hive.registerAdapter(PaperPositionAdapter());
+
+    // Set preferred orientations (allow landscape on desktop/tablet)
+    if (!kIsWeb) {
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
+
+    // Set system UI overlay style for dark theme
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        systemNavigationBarColor: AppColors.background,
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
     );
-    _firebaseAvailable = true;
-    Log.i('Firebase initialized successfully');
-  } catch (e) {
-    Log.w('Firebase initialization failed - running offline: $e');
-    _firebaseAvailable = false;
-  }
 
-  // Load environment variables (API keys, etc.)
-  await EnvConfig.load();
+    runApp(const TradingJournalApp());
+  }, (error, stackTrace) {
+    // Catch any errors not caught by Flutter's error handling
+    Log.e('Unhandled error in zone', error, stackTrace);
+  });
+}
 
-  // Initialize Hive for local storage
-  await Hive.initFlutter();
-
-  // Register Hive type adapters - Trade models
-  Hive.registerAdapter(TradeSideAdapter());
-  Hive.registerAdapter(TradeOutcomeAdapter());
-  Hive.registerAdapter(TradeAdapter());
-
-  // Register Hive type adapters - Paper trading models
-  Hive.registerAdapter(PaperAccountAdapter());
-  Hive.registerAdapter(OrderSideAdapter());
-  Hive.registerAdapter(OrderTypeAdapter());
-  Hive.registerAdapter(OrderStatusAdapter());
-
-  // Initialize MarketDataEngine (for chart data persistence)
-  await MarketDataEngine.instance.init();
-  Hive.registerAdapter(PaperOrderAdapter());
-  Hive.registerAdapter(PaperPositionAdapter());
-
-  // Set preferred orientations
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
-  ]);
-
-  // Set system UI overlay style for dark theme
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: AppColors.background,
-      systemNavigationBarIconBrightness: Brightness.light,
-    ),
-  );
-
-  runApp(const TradingJournalApp());
+/// Set up global error handlers
+void _setupErrorHandlers() {
+  // Handle Flutter framework errors
+  FlutterError.onError = (FlutterErrorDetails details) {
+    if (kReleaseMode) {
+      // In release mode, log but don't crash
+      Log.e('Flutter error: ${details.exceptionAsString()}');
+      // TODO: Send to crash reporting service (Firebase Crashlytics, Sentry, etc.)
+    } else {
+      // In debug mode, use default behavior (prints to console)
+      FlutterError.presentError(details);
+    }
+  };
+  
+  // Handle platform dispatcher errors (Dart runtime errors)
+  PlatformDispatcher.instance.onError = (error, stack) {
+    Log.e('Platform error', error, stack);
+    // Return true to indicate we handled the error
+    return true;
+  };
 }
 
 class TradingJournalApp extends StatelessWidget {

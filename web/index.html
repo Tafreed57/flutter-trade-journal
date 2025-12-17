@@ -18,15 +18,18 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Trading Journal - Track and analyze your trades">
+  <meta name="theme-color" content="#0D1117">
   
   <!-- Google Sign-In Client ID -->
   <meta name="google-signin-client_id" content="938293786158-qgj6eph8n3pr8dntqdfjp1c31mi7ui1h.apps.googleusercontent.com">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="trade_journal_app">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Trading Journal">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
@@ -34,8 +37,94 @@
 
   <title>Trading Journal</title>
   <link rel="manifest" href="manifest.json">
+  
+  <!-- Loading screen styles -->
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #0D1117;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    
+    .loading-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background-color: #0D1117;
+      z-index: 9999;
+    }
+    
+    .loading-logo {
+      width: 80px;
+      height: 80px;
+      margin-bottom: 24px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    
+    .loading-text {
+      color: #E6EDF3;
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    
+    .loading-subtitle {
+      color: #8B949E;
+      font-size: 14px;
+    }
+    
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      margin-top: 32px;
+      border: 3px solid #21262D;
+      border-top-color: #00D26A;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.8; transform: scale(0.95); }
+    }
+  </style>
 </head>
 <body>
+  <!-- Loading screen (hidden when Flutter loads) -->
+  <div id="loading" class="loading-container">
+    <svg class="loading-logo" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="80" height="80" rx="16" fill="#161B22"/>
+      <path d="M20 50L30 35L40 45L55 25" stroke="#00D26A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="55" cy="25" r="4" fill="#00D26A"/>
+      <path d="M20 55H60" stroke="#21262D" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+    <div class="loading-text">Trading Journal</div>
+    <div class="loading-subtitle">Loading your workspace...</div>
+    <div class="loading-spinner"></div>
+  </div>
+  
   <script src="flutter_bootstrap.js" async></script>
+  <script>
+    // Hide loading screen when Flutter is ready
+    window.addEventListener('flutter-first-frame', function() {
+      const loading = document.getElementById('loading');
+      if (loading) {
+        loading.style.transition = 'opacity 0.3s ease';
+        loading.style.opacity = '0';
+        setTimeout(() => loading.remove(), 300);
+      }
+    });
+  </script>
 </body>
 </html>
