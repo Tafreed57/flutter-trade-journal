@@ -52,11 +52,10 @@ class _ChartScreenState extends State<ChartScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final marketProvider = context.read<MarketDataProvider>();
-      if (!marketProvider.isConfigured) return;
       
       // IMPORTANT: Always call init() if not initialized
-      // This handles hot restart recovery where engine has cached data
-      // but provider hasn't connected to live updates yet
+      // This handles hot restart recovery and initial load
+      // Mock data will be used automatically if no API key is configured
       if (!marketProvider.isInitialized && !marketProvider.isLoading) {
         Log.d('ChartScreen: Triggering MarketDataProvider.init()');
         marketProvider.init();
